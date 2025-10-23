@@ -2221,7 +2221,7 @@ Output: {"reply_text":"reply"}`;
         </section>
         )}
         {(stage !== 'idle' || logs.length > 0) && (
-            <section className="mb-12 font-mono text-xs md:text-sm">
+            <section className="mt-12 mb-12 font-mono text-xs md:text-sm">
                 <div className="bg-zinc-900 text-green-400 p-4 rounded-t-sm flex items-center gap-2">
                     <Terminal className="w-4 h-4" />
                     <span className="uppercase tracking-widest">Agent_Workflow_Log.txt</span>
