@@ -9,8 +9,31 @@ import { saveAudioData, getAudioData, deleteAudioData } from '@/utils/db';
 import { fetchYouTubeMetadataServerSide, extractYouTubeId as extractYouTubeIdUtil, ServerSideGeminiAI } from '@/utils/api';
 import { getCriticInfo as getCriticInfoUtil, getStaffInfo as getStaffInfoUtil } from '@/utils/critics';
 
-function cn(...inputs: any[]) {
+// Type for Tailwind class inputs
+type ClassValue = string | number | boolean | undefined | null | ClassValue[];
+
+function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
+}
+
+// Type for Gemini AI media parts
+interface GeminiMediaPart {
+  inlineData?: {
+    mimeType: string;
+    data: string;
+  };
+  fileData?: {
+    mimeType: string;
+    fileUri: string;
+  };
+  text?: string;
+}
+
+// Type for metadata
+interface MediaMetadata {
+  title?: string;
+  artist?: string;
+  album?: string;
 }
 
 interface ReviewData {
@@ -273,7 +296,7 @@ export default function SmudgedPamphlet() {
   const getStaffInfo = getStaffInfoUtil;
   const getCriticInfo = getCriticInfoUtil;
 
-  const getMargotPrompt = (metadata?: any, history?: any[], otherCritics?: any[]) => {
+  const getMargotPrompt = (metadata?: MediaMetadata, history?: unknown[], otherCritics?: unknown[]) => {
     const historyContext = history && history.length > 0
       ? `\n\nYour previous reviews (for consistency):\n${JSON.stringify(history)}`
       : '';
@@ -316,7 +339,7 @@ Output ONLY valid JSON:
 }`;
   };
 
-  const getRexPrompt = (metadata?: any, history?: any[], isYouTube?: boolean, otherCritics?: any[]) => {
+  const getRexPrompt = (metadata?: MediaMetadata, history?: unknown[], isYouTube?: boolean, otherCritics?: unknown[]) => {
     const historyContext = history && history.length > 0
       ? `\n\nYour previous reviews (for consistency):\n${JSON.stringify(history)}`
       : '';
@@ -366,7 +389,7 @@ Output ONLY valid JSON:
 }`;
   };
 
-  const runJulianReview = async (genAI: ServerSideGeminiAI, audioPart: any, metadata?: { title?: string; artist?: string; album?: string }, isYouTube?: boolean) => {
+  const runJulianReview = async (genAI: ServerSideGeminiAI, audioPart: GeminiMediaPart, metadata?: MediaMetadata, isYouTube?: boolean) => {
     setStage('julian_reviewing');
     addLog('AGENT ACTIVATED: Julian Pinter (Chief Critic)');
     addLog(isYouTube ? 'ACTION: Julian is watching the video with visible disdain...' : 'ACTION: Julian is putting on oversized headphones and sighing loudly...');
@@ -488,7 +511,7 @@ Output ONLY valid JSON:
     }
   };
 
-  const runRexReview = async (genAI: ServerSideGeminiAI, videoPart: any, metadata?: { title?: string; artist?: string }, isYouTube?: boolean) => {
+  const runRexReview = async (genAI: ServerSideGeminiAI, videoPart: GeminiMediaPart, metadata?: MediaMetadata, isYouTube?: boolean) => {
     setStage('rex_reviewing');
     addLog('AGENT ACTIVATED: Rex Beaumont (Film Critic)');
     addLog('ACTION: Rex is adjusting his thick-rimmed glasses and starting the video at 1.5x speed...');
@@ -558,7 +581,7 @@ Output ONLY valid JSON:
     }
   };
 
-  const classifyDocument = async (genAI: ServerSideGeminiAI, documentPart: any): Promise<'literary' | 'business'> => {
+  const classifyDocument = async (genAI: ServerSideGeminiAI, documentPart: GeminiMediaPart): Promise<'literary' | 'business'> => {
     addLog('AGENT ACTIVATED: Document Classifier');
     addLog('ACTION: Analyzing document type...');
 
@@ -625,7 +648,7 @@ Output ONLY valid JSON:
     }
   };
 
-  const runMargotReview = async (genAI: ServerSideGeminiAI, documentPart: any) => {
+  const runMargotReview = async (genAI: ServerSideGeminiAI, documentPart: GeminiMediaPart) => {
     setStage('margot_reviewing');
     addLog('AGENT ACTIVATED: Margot Ashford (Literary Critic)');
     addLog('ACTION: Margot is adjusting her three PhDs on the wall and opening the document with visible contempt...');
@@ -654,7 +677,7 @@ Output ONLY valid JSON:
         summary: r.review.summary
       }));
 
-    const systemPrompt = getMargotPrompt(null, margotHistory, otherCritics);
+    const systemPrompt = getMargotPrompt(undefined, margotHistory, otherCritics);
 
     try {
       const result = await model.generateContent({
@@ -695,7 +718,7 @@ Output ONLY valid JSON:
     }
   };
 
-  const runPatriciaReview = async (genAI: ServerSideGeminiAI, documentPart: any) => {
+  const runPatriciaReview = async (genAI: ServerSideGeminiAI, documentPart: GeminiMediaPart) => {
     setStage('patricia_reviewing');
     addLog('AGENT ACTIVATED: Patricia Chen (Business Editor)');
     addLog('ACTION: Patricia is opening the document with her red pen ready...');
@@ -767,7 +790,7 @@ Keep it professional but pointed. Call out BS when you see it. Give credit when 
     }
   };
 
-  const runCommenters = async (genAI: ServerSideGeminiAI, reviewData: ReviewData, audioPart: any) => {
+  const runCommenters = async (genAI: ServerSideGeminiAI, reviewData: ReviewData, audioPart: GeminiMediaPart) => {
     setStage('commenters_reacting');
     addLog('AGENTS ACTIVATED: The Comment Section Horde (x15)');
     addLog('ACTION: Trolls are emerging from under digital bridges...');
