@@ -1,4 +1,4 @@
-import { getCriticPersona, getCriticInfo, getStaffInfo } from './critics';
+import { getCriticPersona, getCriticInfo, getStaffInfo, type CriticType } from './critics';
 
 interface PodcastScript {
   speaker: string;
@@ -17,6 +17,9 @@ interface PodcastGenerationOptions {
   isEditorial?: boolean;
   comments?: any[];
   youtubeUrl?: string;
+  audioFileName?: string;
+  isYouTube?: boolean;
+  documentFileName?: string;
 }
 
 /**
@@ -54,7 +57,14 @@ export async function generatePodcastScript(
       score,
       summary,
       body,
-      notableLyrics
+      notableLyrics,
+      {
+        youtubeUrl: options.youtubeUrl,
+        audioFileName: options.audioFileName,
+        isYouTube: options.isYouTube,
+        documentFileName: options.documentFileName,
+        criticType: options.criticType
+      }
     );
   }
 }
@@ -70,20 +80,41 @@ async function generateOneOnOnePodcast(
   score: number,
   summary: string,
   body: string[],
-  notableLyrics?: string
+  notableLyrics?: string,
+  options?: Pick<PodcastGenerationOptions, 'youtubeUrl' | 'audioFileName' | 'isYouTube' | 'documentFileName' | 'criticType'>
 ): Promise<PodcastScript[]> {
   const reviewBodyText = body.join('\n\n');
+
+  // Build media context
+  let mediaContext = '';
+  if (options?.isYouTube && options?.youtubeUrl) {
+    mediaContext = `\nMEDIA TYPE: YouTube video (${options.youtubeUrl})
+NOTE: This is a VIDEO review. Reference visual elements, cinematography, performances, or video content as appropriate.`;
+  } else if (options?.audioFileName) {
+    mediaContext = `\nMEDIA TYPE: Audio file (${options.audioFileName})
+NOTE: This is an AUDIO/MUSIC review. Reference songs, production, vocals, instrumentation as appropriate.`;
+  } else if (options?.documentFileName) {
+    mediaContext = `\nMEDIA TYPE: Written document (${options.documentFileName})
+NOTE: This is a DOCUMENT review. Reference writing style, arguments, structure, content as appropriate.`;
+  }
+
+  // Get full persona prompts for rich character details
+  const criticPersona = options?.criticType
+    ? getCriticPersona(options.criticType, { context: 'colleague_interaction' })
+    : `${criticInfo.bio}`;
+
+  const chuckPersona = getCriticPersona('editor', { context: 'colleague_interaction' });
 
   const prompt = `You are a podcast script generator for "The Smudged Pamphlet" podcast.
 
 Generate a natural, engaging 3-5 minute conversation between:
 
-**Chuck Morrison (Host)**: ${chuckInfo.bio}
-${chuckInfo.personality}
-VOCAL STYLE: Make Chuck sound warm, straightforward, and conversational. He should speak with confidence and a "regular guy" tone - not pretentious. Use a friendly, direct style.
+**Chuck Morrison (Host)**:
+${chuckPersona}
+VOCAL STYLE: Make Chuck sound warm, straightforward, and conversational. He should speak with confidence and a "regular guy" tone - not pretentious. Use a friendly, direct style. He likes his music loud, his movies with explosions, and his words short. He's the voice of the audience.
 
-**${criticInfo.name} (Guest)**: ${criticInfo.bio}
-${criticInfo.personality}
+**${criticInfo.name} (Guest)**:
+${criticPersona}
 VOCAL STYLE: ${getVocalStyleForCritic(criticInfo.name)}
 
 CONTEXT:
@@ -91,7 +122,7 @@ CONTEXT:
 - Artist/Subject: ${artist}
 - Score: ${score}/10
 - Summary: "${summary}"
-${notableLyrics ? `- Notable Quote: "${notableLyrics}"` : ''}
+${notableLyrics ? `- Notable Quote: "${notableLyrics}"` : ''}${mediaContext}
 
 REVIEW CONTENT:
 ${reviewBodyText}
@@ -123,15 +154,33 @@ DO NOT include any stage directions, descriptions, or markdown. JUST the dialogu
     const response = await fetch('/api/gemini/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify({
+        model: 'gemini-2.0-flash-exp',
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: prompt }]
+          }
+        ],
+        generationConfig: {
+          temperature: 0.9, // Higher temperature for more creative dialogue
+          maxOutputTokens: 2048,
+        }
+      }),
     });
 
     if (!response.ok) {
-      throw new Error('Failed to generate podcast script');
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to generate podcast script');
     }
 
     const data = await response.json();
-    const scriptText = data.text || data.content || '';
+    const scriptText = data.candidates?.[0]?.content?.parts?.[0]?.text ||
+                       data.parts?.[0]?.text || '';
+
+    if (!scriptText) {
+      throw new Error('No script text returned from API');
+    }
 
     return parseScriptToStructured(scriptText);
   } catch (error) {
@@ -165,11 +214,15 @@ async function generateEditorialRoundtable(
   const criticInfos = Array.from(participatingCritics).map(type =>
     getCriticInfo(type as any)
   );
-  const chuckInfo = getStaffInfo('editor');
 
-  const criticDescriptions = criticInfos.map(c =>
-    `**${c.name}**: ${c.bio}\n${c.personality}\nVOCAL STYLE: ${getVocalStyleForCritic(c.name)}`
-  ).join('\n\n');
+  const chuckPersona = getCriticPersona('editor', { context: 'colleague_interaction' });
+
+  // Get full personas for each critic
+  const criticDescriptions = Array.from(participatingCritics).map(type => {
+    const info = getCriticInfo(type as any);
+    const persona = getCriticPersona(type as any, { context: 'colleague_interaction' });
+    return `**${info.name}**:\n${persona}\nVOCAL STYLE: ${getVocalStyleForCritic(info.name)}`;
+  }).join('\n\n');
 
   const reviewBodyText = body.join('\n\n');
 
@@ -177,9 +230,9 @@ async function generateEditorialRoundtable(
 
 Generate a natural, engaging 5-8 minute roundtable discussion between:
 
-**Chuck Morrison (Host/Moderator)**: ${chuckInfo.bio}
-${chuckInfo.personality}
-VOCAL STYLE: Make Chuck sound warm but authoritative as a moderator. He should guide the conversation, interrupt when needed, and keep things moving. Friendly but in charge.
+**Chuck Morrison (Host/Moderator)**:
+${chuckPersona}
+VOCAL STYLE: Make Chuck sound warm but authoritative as a moderator. He should guide the conversation, interrupt when needed, and keep things moving. Friendly but in charge. He's the everyman who calls out pretension and defends the audience.
 
 PANELISTS:
 ${criticDescriptions}
@@ -226,15 +279,33 @@ DO NOT include any stage directions, descriptions, or markdown. JUST the dialogu
     const response = await fetch('/api/gemini/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify({
+        model: 'gemini-2.0-flash-exp',
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: prompt }]
+          }
+        ],
+        generationConfig: {
+          temperature: 0.9, // Higher temperature for more creative dialogue
+          maxOutputTokens: 3072, // More tokens for longer roundtable discussions
+        }
+      }),
     });
 
     if (!response.ok) {
-      throw new Error('Failed to generate editorial podcast script');
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to generate editorial podcast script');
     }
 
     const data = await response.json();
-    const scriptText = data.text || data.content || '';
+    const scriptText = data.candidates?.[0]?.content?.parts?.[0]?.text ||
+                       data.parts?.[0]?.text || '';
+
+    if (!scriptText) {
+      throw new Error('No script text returned from API');
+    }
 
     return parseScriptToStructured(scriptText);
   } catch (error) {

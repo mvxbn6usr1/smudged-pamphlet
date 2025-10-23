@@ -26,6 +26,9 @@ export interface Review {
   };
   comments?: any[];
   youtubeUrl?: string;
+  audioFileName?: string;
+  isYouTube?: boolean;
+  documentFileName?: string;
 }
 
 /**
@@ -53,7 +56,7 @@ export async function generatePodcast(
     onProgress?.({
       status: 'generating_script',
       progress: 10,
-      message: 'Generating conversation script...',
+      message: 'Setting up the conversation...',
     });
 
     const script = await generatePodcastScript({
@@ -68,12 +71,15 @@ export async function generatePodcast(
       isEditorial,
       comments: review.comments || [],
       youtubeUrl: review.youtubeUrl,
+      audioFileName: review.audioFileName,
+      isYouTube: review.isYouTube,
+      documentFileName: review.documentFileName,
     });
 
     onProgress?.({
       status: 'generating_script',
       progress: 40,
-      message: 'Script generated, preparing audio...',
+      message: 'Preparing to record...',
     });
 
     // Step 3: Format script for TTS
@@ -93,7 +99,7 @@ export async function generatePodcast(
     onProgress?.({
       status: 'generating_audio',
       progress: 50,
-      message: 'Generating audio with Gemini TTS...',
+      message: 'Recording podcast...',
     });
 
     const audioResponse = await fetch('/api/podcast/generate-audio', {
@@ -115,7 +121,7 @@ export async function generatePodcast(
     onProgress?.({
       status: 'generating_audio',
       progress: 80,
-      message: 'Audio generated, saving...',
+      message: 'Almost done...',
     });
 
     // Step 6: Convert to data URL and save

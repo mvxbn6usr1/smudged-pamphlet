@@ -1,4 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { addWavHeader } from '@/utils/wavConverter';
 
 interface SpeakerConfig {
   speaker: string;
@@ -89,11 +90,20 @@ ${script}`;
       return res.status(500).json({ error: 'No audio data returned from Gemini' });
     }
 
-    // Return the base64 audio data
-    // Client will convert this to a data URL and save to IndexedDB
+    // Convert base64 to buffer
+    const pcmBuffer = Buffer.from(audioBase64, 'base64');
+
+    // Add WAV headers to the PCM data
+    // Gemini TTS outputs 24kHz, mono, 16-bit PCM
+    const wavBuffer = addWavHeader(pcmBuffer, 24000, 1, 16);
+
+    // Convert back to base64
+    const wavBase64 = wavBuffer.toString('base64');
+
+    // Return the properly formatted WAV audio
     res.status(200).json({
-      audioData: audioBase64,
-      mimeType: 'audio/wav', // Gemini returns WAV format
+      audioData: wavBase64,
+      mimeType: 'audio/wav',
     });
 
   } catch (error) {

@@ -1110,13 +1110,16 @@ Generate a new comment. Output: {"username":"name","persona_type":"type","text":
                       <div className="animate-spin w-8 h-8 border-4 border-zinc-900 border-t-transparent rounded-full"></div>
                       <div className="flex-1">
                         <div className="font-black uppercase text-sm mb-1">
-                          {podcastProgress?.status === 'generating_script' && 'Generating Roundtable Script'}
-                          {podcastProgress?.status === 'generating_audio' && 'Generating Multi-Speaker Audio'}
+                          {podcastProgress?.status === 'generating_script' && 'Preparing Roundtable'}
+                          {podcastProgress?.status === 'generating_audio' && 'Recording Discussion'}
                           {podcastProgress?.status === 'complete' && 'Complete'}
                           {podcastProgress?.status === 'error' && 'Error'}
                         </div>
                         <div className="text-sm text-zinc-600">
-                          {podcastProgress?.message || 'Processing...'}
+                          {podcastProgress?.status === 'generating_script' && 'Getting the critics together...'}
+                          {podcastProgress?.status === 'generating_audio' && 'This may take a minute...'}
+                          {podcastProgress?.status === 'complete' && 'Ready to play!'}
+                          {podcastProgress?.status === 'error' && (podcastProgress?.error || 'Something went wrong')}
                         </div>
                       </div>
                     </div>
