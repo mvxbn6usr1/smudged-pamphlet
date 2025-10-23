@@ -86,17 +86,26 @@ async function generateOneOnOnePodcast(
 ): Promise<PodcastScript[]> {
   const reviewBodyText = body.join('\n\n');
 
-  // Build media context
+  // Build media context - make it very prominent
   let mediaContext = '';
-  if (options?.isYouTube && options?.youtubeUrl) {
-    mediaContext = `\nMEDIA TYPE: YouTube video (${options.youtubeUrl})
-NOTE: This is a VIDEO review. Reference visual elements, cinematography, performances, or video content as appropriate.`;
+  let mediaTypeDescription = '';
+
+  if (options?.documentFileName) {
+    mediaContext = `\n\n⚠️ CRITICAL - MEDIA TYPE: WRITTEN DOCUMENT ⚠️
+Document: ${options.documentFileName}
+This is NOT music, NOT audio, NOT a song, NOT an album.
+This is a WRITTEN DOCUMENT (PDF, text file, business doc, or literary work).`;
+    mediaTypeDescription = 'a written document';
+  } else if (options?.isYouTube && options?.youtubeUrl) {
+    mediaContext = `\n\n⚠️ CRITICAL - MEDIA TYPE: VIDEO ⚠️
+Video URL: ${options.youtubeUrl}
+This is a VIDEO review (YouTube, film, visual content).`;
+    mediaTypeDescription = 'a video/film';
   } else if (options?.audioFileName) {
-    mediaContext = `\nMEDIA TYPE: Audio file (${options.audioFileName})
-NOTE: This is an AUDIO/MUSIC review. Reference songs, production, vocals, instrumentation as appropriate.`;
-  } else if (options?.documentFileName) {
-    mediaContext = `\nMEDIA TYPE: Written document (${options.documentFileName})
-NOTE: This is a DOCUMENT review. Reference writing style, arguments, structure, content as appropriate.`;
+    mediaContext = `\n\n⚠️ CRITICAL - MEDIA TYPE: AUDIO/MUSIC ⚠️
+Audio file: ${options.audioFileName}
+This is MUSIC or AUDIO content (song, album, track, audio recording).`;
+    mediaTypeDescription = 'music/audio';
   }
 
   // Get full persona prompts for rich character details
@@ -124,6 +133,8 @@ CONTEXT:
 - Score: ${score}/10
 - Summary: "${summary}"
 ${notableLyrics ? `- Notable Quote: "${notableLyrics}"` : ''}${mediaContext}
+
+IMPORTANT: This review is about ${mediaTypeDescription}. Make sure the conversation reflects this throughout.
 
 REVIEW CONTENT:
 ${reviewBodyText}
@@ -215,28 +226,36 @@ async function generateEditorialRoundtable(
   const { reviewTitle, artist, score, summary, body } = options;
 
   // Extract unique critics from comments
-  const participatingCritics = new Set<string>();
+  const validCriticTypes: CriticType[] = ['music', 'film', 'literary', 'business'];
+  const participatingCritics = new Set<CriticType>();
+
   comments.forEach(comment => {
-    if (comment.persona_type !== 'user' && comment.persona_type !== 'bot') {
-      participatingCritics.add(comment.persona_type);
+    // Check if comment has a critic type
+    if (comment.critic && validCriticTypes.includes(comment.critic)) {
+      participatingCritics.add(comment.critic);
     }
     comment.replies?.forEach((reply: any) => {
-      if (reply.critic && reply.persona_type !== 'user') {
+      if (reply.critic && validCriticTypes.includes(reply.critic)) {
         participatingCritics.add(reply.critic);
       }
     });
   });
 
+  // Fallback: if no critics found, use the review's critic type
+  if (participatingCritics.size === 0 && options.criticType) {
+    participatingCritics.add(options.criticType);
+  }
+
   const criticInfos = Array.from(participatingCritics).map(type =>
-    getCriticInfo(type as any)
+    getCriticInfo(type)
   );
 
   const chuckPersona = getCriticPersona('editor', { context: 'colleague_interaction' });
 
   // Get full personas for each critic
   const criticDescriptions = Array.from(participatingCritics).map(type => {
-    const info = getCriticInfo(type as any);
-    const persona = getCriticPersona(type as any, { context: 'colleague_interaction' });
+    const info = getCriticInfo(type);
+    const persona = getCriticPersona(type, { context: 'colleague_interaction' });
     return `**${info.name}**:\n${persona}\nVOCAL STYLE: ${getVocalStyleForCritic(info.name)}`;
   }).join('\n\n');
 

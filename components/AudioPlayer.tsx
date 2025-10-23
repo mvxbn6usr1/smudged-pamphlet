@@ -76,7 +76,7 @@ export default function AudioPlayer({ audioUrl, audioFileName, albumArt, wavefor
           </div>
 
           {/* Waveform Visualization - Symmetrical */}
-          {waveformData && waveformData.length > 0 && (
+          {waveformData && waveformData.length > 0 ? (
             <div
               className="h-20 flex items-center gap-0.5 cursor-pointer relative overflow-hidden rounded-sm bg-zinc-200/50"
               onClick={handleSeek}
@@ -113,6 +113,27 @@ export default function AudioPlayer({ audioUrl, audioFileName, albumArt, wavefor
                   </div>
                 );
               })}
+            </div>
+          ) : (
+            /* Fallback progress bar for podcasts/audio without waveform */
+            <div
+              className="h-20 cursor-pointer relative overflow-hidden rounded-sm bg-zinc-200/50"
+              onClick={handleSeek}
+            >
+              {/* Progress overlay - same style as waveform */}
+              <div
+                className="absolute inset-0 bg-amber-400/30 pointer-events-none transition-all"
+                style={{ width: `${progress}%` }}
+              />
+              {/* Simple bar indicator */}
+              <div className="h-full flex items-center justify-center">
+                <div className="w-full h-1 bg-zinc-400 relative">
+                  <div
+                    className="absolute inset-0 bg-zinc-900 transition-all"
+                    style={{ width: `${progress}%` }}
+                  />
+                </div>
+              </div>
             </div>
           )}
 
