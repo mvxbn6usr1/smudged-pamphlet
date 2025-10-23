@@ -177,12 +177,21 @@ export default function Editorial() {
 
       for (const review of reviewsToComment) {
         if (review.isYouTube && review.youtubeUrl) {
-          // YouTube video - add as file URI
-          mediaParts.push({
-            fileData: {
-              fileUri: review.youtubeUrl
+          // YouTube video - validate URL format before adding
+          try {
+            const url = new URL(review.youtubeUrl);
+            if (url.hostname.includes('youtube.com') || url.hostname.includes('youtu.be')) {
+              mediaParts.push({
+                fileData: {
+                  fileUri: review.youtubeUrl
+                }
+              });
+            } else {
+              console.warn(`Skipping invalid YouTube URL: ${review.youtubeUrl}`);
             }
-          });
+          } catch (e) {
+            console.warn(`Skipping malformed URL: ${review.youtubeUrl}`);
+          }
         } else if (review.hasAudioInDB) {
           // Audio/video file from IndexedDB
           try {

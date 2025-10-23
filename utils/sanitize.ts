@@ -1,16 +1,11 @@
-import DOMPurify from 'dompurify';
+import DOMPurify from 'isomorphic-dompurify';
 
 /**
  * Sanitizes user input to prevent XSS attacks
  * Allows basic formatting tags but removes scripts and dangerous attributes
+ * Works in both browser and Node.js environments
  */
 export function sanitizeUserInput(input: string): string {
-  if (typeof window === 'undefined') {
-    // Server-side: just strip HTML tags
-    return input.replace(/<[^>]*>/g, '');
-  }
-
-  // Client-side: use DOMPurify
   return DOMPurify.sanitize(input, {
     ALLOWED_TAGS: ['b', 'i', 'em', 'strong', 'br'],
     ALLOWED_ATTR: [],
@@ -20,12 +15,9 @@ export function sanitizeUserInput(input: string): string {
 
 /**
  * Sanitizes text for display (stricter - no HTML at all)
+ * Works in both browser and Node.js environments
  */
 export function sanitizeText(text: string): string {
-  if (typeof window === 'undefined') {
-    return text.replace(/<[^>]*>/g, '');
-  }
-
   return DOMPurify.sanitize(text, {
     ALLOWED_TAGS: [],
     KEEP_CONTENT: true,

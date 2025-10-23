@@ -1949,6 +1949,29 @@ Output: {"reply_text":"reply"}`;
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
 
+      // File size validation (20MB limit to match API)
+      const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB in bytes
+      if (file.size > MAX_FILE_SIZE) {
+        setErrorMsg(`File too large: Maximum file size is 20MB. Your file is ${(file.size / 1024 / 1024).toFixed(2)}MB.`);
+        return;
+      }
+
+      // MIME type validation
+      const allowedTypes = [
+        // Audio
+        'audio/mpeg', 'audio/mp3', 'audio/mp4', 'audio/m4a', 'audio/ogg', 'audio/wav', 'audio/webm',
+        // Video
+        'video/mp4', 'video/webm', 'video/quicktime',
+        // Documents
+        'application/pdf', 'text/plain', 'application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      ];
+
+      if (!allowedTypes.includes(file.type)) {
+        setErrorMsg(`Unsupported file type: ${file.type}. Please upload audio, video, or document files.`);
+        return;
+      }
+
       // Validate file signature matches claimed MIME type
       const isValid = await validateFileSignature(file);
       if (!isValid) {
