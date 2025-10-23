@@ -88,6 +88,12 @@ export default async function handler(
     return res.status(500).json({ error: 'Server configuration error' });
   }
 
+  // Validate API key format (Google API keys start with 'AIza')
+  if (!GEMINI_API_KEY.startsWith('AIza')) {
+    console.error('GEMINI_API_KEY appears to be invalid format');
+    return res.status(500).json({ error: 'Server configuration error' });
+  }
+
   try {
     const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
     const geminiModel = genAI.getGenerativeModel({ model });

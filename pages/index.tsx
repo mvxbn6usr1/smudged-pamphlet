@@ -8,6 +8,7 @@ import DocumentPreview from '@/components/DocumentPreview';
 import { saveAudioData, getAudioData, deleteAudioData } from '@/utils/db';
 import { fetchYouTubeMetadataServerSide, extractYouTubeId as extractYouTubeIdUtil, ServerSideGeminiAI } from '@/utils/api';
 import { getCriticInfo as getCriticInfoUtil, getStaffInfo as getStaffInfoUtil } from '@/utils/critics';
+import { sanitizeUsername, sanitizeText } from '@/utils/sanitize';
 
 // Type for Tailwind class inputs
 type ClassValue = string | number | boolean | undefined | null | ClassValue[];
@@ -187,6 +188,41 @@ export default function SmudgedPamphlet() {
   // Constants for organic comment generation timing
   const COMMENT_THREAD_STAGGER_MS = 5000; // Delay between starting comment threads
   const MAX_COMMENT_GENERATION_TIME_MS = 300000; // 5 minutes hard stop
+
+  // File validation using magic bytes (file signatures)
+  const validateFileSignature = async (file: File): Promise<boolean> => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const arr = new Uint8Array(reader.result as ArrayBuffer);
+
+        // Check file signatures (magic bytes)
+        // Audio formats
+        if (arr[0] === 0xFF && arr[1] === 0xFB) return resolve(true); // MP3
+        if (arr[0] === 0x49 && arr[1] === 0x44 && arr[2] === 0x33) return resolve(true); // MP3 with ID3
+        if (arr[0] === 0x66 && arr[1] === 0x74 && arr[2] === 0x79 && arr[3] === 0x70) return resolve(true); // MP4/M4A
+        if (arr[0] === 0x4F && arr[1] === 0x67 && arr[2] === 0x67 && arr[3] === 0x53) return resolve(true); // OGG
+        if (arr[0] === 0x52 && arr[1] === 0x49 && arr[2] === 0x46 && arr[3] === 0x46) return resolve(true); // WAV/WEBM
+
+        // Video formats
+        if (arr[4] === 0x66 && arr[5] === 0x74 && arr[6] === 0x79 && arr[7] === 0x70) return resolve(true); // MP4/MOV
+        if (arr[0] === 0x1A && arr[1] === 0x45 && arr[2] === 0xDF && arr[3] === 0xA3) return resolve(true); // WEBM/MKV
+
+        // Document formats
+        if (arr[0] === 0x25 && arr[1] === 0x50 && arr[2] === 0x44 && arr[3] === 0x46) return resolve(true); // PDF
+        if (arr[0] === 0x50 && arr[1] === 0x4B && arr[2] === 0x03 && arr[3] === 0x04) return resolve(true); // DOCX/ZIP
+        if (arr[0] === 0xD0 && arr[1] === 0xCF && arr[2] === 0x11 && arr[3] === 0xE0) return resolve(true); // DOC
+
+        // Text formats (no magic bytes, check by content)
+        if (file.type.startsWith('text/')) return resolve(true);
+
+        // If we got here, file signature doesn't match MIME type
+        resolve(false);
+      };
+      reader.onerror = () => resolve(false);
+      reader.readAsArrayBuffer(file.slice(0, 8)); // Read first 8 bytes
+    });
+  };
 
   // Router to determine which critic handles the content
   type CriticType = 'music' | 'film' | 'literary' | 'business';
@@ -1791,14 +1827,18 @@ Output: {"reply_text":"reply"}`;
     try {
       const genAI = new ServerSideGeminiAI();
 
+      // Sanitize user input
+      const sanitizedUsername = sanitizeUsername(userName.trim());
+      const sanitizedComment = sanitizeText(userComment.trim());
+
       if (replyingTo) {
         // Create a reply
         const newReply: Reply = {
           id: `r-user-${Date.now()}`,
-          username: userName.trim(),
+          username: sanitizedUsername,
           persona_type: 'Human User',
           timestamp: 'Just now',
-          text: userComment.trim(),
+          text: sanitizedComment,
           likes: 0,
           is_julian: false,
           replyingToUsername: replyingTo.username,
@@ -1834,10 +1874,10 @@ Output: {"reply_text":"reply"}`;
         // Create a new top-level comment
         const newComment: Comment = {
           id: `c-user-${Date.now()}`,
-          username: userName.trim(),
+          username: sanitizedUsername,
           persona_type: 'Human User',
           timestamp: 'Just now',
-          text: userComment.trim(),
+          text: sanitizedComment,
           likes: 0,
           replies: []
         };
@@ -1908,6 +1948,14 @@ Output: {"reply_text":"reply"}`;
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
+
+      // Validate file signature matches claimed MIME type
+      const isValid = await validateFileSignature(file);
+      if (!isValid) {
+        setErrorMsg('Invalid file: File content does not match the file type. The file may be corrupted or renamed.');
+        return;
+      }
+
       setAudioFile(file);
       setAudioUrl(URL.createObjectURL(file));
       setReview(null);
