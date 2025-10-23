@@ -32,7 +32,7 @@ interface Reply {
   likes: number;
   is_julian: boolean; // Legacy - kept for backwards compatibility
   is_critic?: boolean; // New - indicates this is from the active critic
-  critic?: 'music' | 'film' | 'literary'; // Which critic this is from
+  critic?: 'music' | 'film' | 'literary' | 'business'; // Which critic this is from
   replyingToUsername?: string; // Username being replied to in the thread
   replyingToId?: string; // ID of the reply being replied to
 }

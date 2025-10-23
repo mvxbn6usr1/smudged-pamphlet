@@ -130,8 +130,8 @@ export default function ReviewPage() {
               try {
                 const audioData = await getAudioData(foundReview.id);
                 if (audioData) {
-                  // For documents (literary reviews), recreate File object for download
-                  if (foundReview.review.critic === 'literary' && foundReview.audioFileName) {
+                  // For documents (literary/business reviews), recreate File object for download
+                  if ((foundReview.review.critic === 'literary' || foundReview.review.critic === 'business') && foundReview.audioFileName) {
                     const response = await fetch(audioData);
                     const blob = await response.blob();
                     const file = new File([blob], foundReview.audioFileName, { type: blob.type });
