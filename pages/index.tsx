@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Upload, MessageSquare, ThumbsDown, Terminal, ShieldAlert, ChevronDown, Music, Save, Trash2, Archive, X, ExternalLink, FileText } from 'lucide-react';
+import { Upload, MessageSquare, ThumbsDown, Terminal, ShieldAlert, ChevronDown, Music, Save, Trash2, Archive, X, ExternalLink, FileText, File, Film } from 'lucide-react';
 import clsx from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { useRouter } from 'next/router';
 import AudioPlayer from '@/components/AudioPlayer';
+import DocumentPreview from '@/components/DocumentPreview';
 import { saveAudioData, getAudioData, deleteAudioData } from '@/utils/db';
 import { fetchYouTubeMetadataServerSide, extractYouTubeId as extractYouTubeIdUtil, ServerSideGeminiAI } from '@/utils/api';
 
@@ -18,7 +19,7 @@ interface ReviewData {
   summary: string;
   body: string[];
   notable_lyrics_quoted: string;
-  critic?: 'music' | 'film' | 'literary';
+  critic?: 'music' | 'film' | 'literary' | 'business';
   criticName?: string;
 }
 
@@ -64,6 +65,8 @@ interface SavedReview {
   audioPart?: any; // Stored audio part for generating more comments
   youtubeUrl?: string; // YouTube video URL
   isYouTube?: boolean; // Flag to indicate this is a YouTube review
+  documentContent?: string; // Extracted text content for documents/PDFs
+  documentFileName?: string; // Original document filename
 }
 
 export default function SmudgedPamphlet() {
@@ -158,7 +161,7 @@ export default function SmudgedPamphlet() {
   };
 
   // Router to determine which critic handles the content
-  type CriticType = 'music' | 'film' | 'literary';
+  type CriticType = 'music' | 'film' | 'literary' | 'business';
   type StaffType = CriticType | 'editor';
 
   const determineContentCritic = async (
@@ -297,6 +300,16 @@ export default function SmudgedPamphlet() {
           color: 'emerald-400',
           avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=margotashford&top=straightAndStrand&eyebrows=raisedExcited',
           bio: 'Literary Critic, three PhDs and counting.'
+        };
+      case 'business':
+        return {
+          name: 'Patricia Chen',
+          username: 'PatriciaChen',
+          title: 'Business Editor',
+          publication: 'The Smudged Pamphlet',
+          color: 'blue-500',
+          avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=patriciachen&top=longHair&eyebrows=raisedExcitedNatural&eyes=happy&mouth=serious',
+          bio: 'Business Editor, zero tolerance for corporate jargon.'
         };
       case 'editor':
         return {
@@ -599,6 +612,53 @@ Output ONLY valid JSON:
     }
   };
 
+  const classifyDocument = async (genAI: ServerSideGeminiAI, documentPart: any): Promise<'literary' | 'business'> => {
+    addLog('AGENT ACTIVATED: Document Classifier');
+    addLog('ACTION: Analyzing document type...');
+
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-pro' });
+
+    const prompt = `You are a document classifier for 'The Smudged Pamphlet'.
+
+Analyze the provided document and determine if it is:
+- LITERARY: Fiction, poetry, creative non-fiction, literary essays, novels, short stories, memoirs with artistic merit
+- BUSINESS: Business documents, academic papers, technical reports, professional writing, white papers, case studies, research papers, educational materials
+
+CRITICAL: Base your decision on the CONTENT and PURPOSE of the document:
+- Literary works are creative, narrative, or artistic in nature
+- Business/academic documents are informational, analytical, or professional in nature
+
+Output ONLY valid JSON:
+{
+  "classification": "literary" or "business",
+  "confidence": "high" or "medium" or "low",
+  "reasoning": "Brief explanation (one sentence)"
+}`;
+
+    try {
+      const result = await model.generateContent({
+        contents: [
+          { role: 'user', parts: [{ text: prompt }] },
+          { role: 'user', parts: [documentPart] }
+        ],
+        generationConfig: {
+          responseMimeType: 'application/json'
+        }
+      });
+
+      const classificationText = result.response.text();
+      const classification = JSON.parse(classificationText);
+
+      addLog(`CLASSIFICATION: ${classification.classification.toUpperCase()} (${classification.confidence} confidence)`);
+      addLog(`REASON: ${classification.reasoning}`);
+
+      return classification.classification as 'literary' | 'business';
+    } catch (e: any) {
+      addLog('ERROR: Classification failed, defaulting to literary');
+      return 'literary';
+    }
+  };
+
   const runMargotReview = async (genAI: ServerSideGeminiAI, documentPart: any) => {
     setStage('margot_reviewing');
     addLog('AGENT ACTIVATED: Margot Ashford (Literary Critic)');
@@ -669,6 +729,78 @@ Output ONLY valid JSON:
     }
   };
 
+  const runPatriciaReview = async (genAI: ServerSideGeminiAI, documentPart: any) => {
+    setStage('patricia_reviewing');
+    addLog('AGENT ACTIVATED: Patricia Chen (Business Editor)');
+    addLog('ACTION: Patricia is opening the document with her red pen ready...');
+
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-pro' });
+
+    const systemPrompt = `
+You are Patricia Chen, business editor for 'The Smudged Pamphlet'.
+
+YOUR CHARACTER:
+You're a no-nonsense professional who despises corporate jargon, buzzwords, and meaningless business-speak. You have an MBA and 15 years of business journalism experience. You value clarity, actionable insights, and cutting through the BS.
+
+You despise:
+- Corporate jargon ("synergy," "leverage," "paradigm shift")
+- Vague mission statements
+- Documents that say nothing in 10 pages
+- "Thought leadership" that contains no actual thoughts
+- Business books that could have been emails
+
+You love (rarely):
+- Clear, concise writing
+- Actual data and evidence
+- Practical advice that works
+- Writers who respect their readers' time
+- Documents that get to the point
+
+Your scores typically range 3.0-6.5. You'll give a 7-8.5 when something is genuinely useful and well-written.
+
+Read the provided business/academic document. Write a sharp, professional review.
+
+CRITICAL: Output ONLY valid JSON with NO markdown formatting, NO backticks, NO extra text.
+{
+  "title": "Document title",
+  "artist": "Author name or organization",
+  "score": (number between 0-10, one decimal),
+  "summary": "One punchy sentence capturing your verdict",
+  "body": ["paragraph1", "paragraph2", "paragraph3", "paragraph4"],
+  "notable_lyrics_quoted": "A key quote or excerpt from the document (or 'N/A')"
+}
+
+Body structure:
+1. Opening: What this document claims to do
+2. The reality: What it actually does (or doesn't do)
+3. Specific criticisms: Jargon, clarity issues, missing substance
+4. Final verdict: Is it worth anyone's time?
+
+Keep it professional but pointed. Call out BS when you see it. Give credit when something actually works.`;
+
+    try {
+      const result = await model.generateContent({
+        contents: [
+          { role: 'user', parts: [{ text: systemPrompt }] },
+          { role: 'user', parts: [documentPart] }
+        ],
+        generationConfig: {
+          responseMimeType: 'application/json'
+        }
+      });
+
+      const reviewText = result.response.text();
+      const reviewData = cleanAndParseJSON(reviewText);
+      reviewData.critic = 'business';
+      reviewData.criticName = 'Patricia Chen';
+      setReview(reviewData);
+      addLog('SUCCESS: Patricia has cut through the corporate speak.');
+      return reviewData;
+    } catch (e: any) {
+      throw new Error(`Patricia refused to work: ${e.message}`);
+    }
+  };
+
   const runCommenters = async (genAI: ServerSideGeminiAI, reviewData: ReviewData, audioPart: any) => {
     setStage('commenters_reacting');
     addLog('AGENTS ACTIVATED: The Comment Section Horde (x15)');
@@ -682,19 +814,37 @@ Output ONLY valid JSON:
         }
     });
 
+    // Get critic info dynamically
+    const criticType = reviewData.critic || 'music';
+    const criticInfo = getCriticInfo(criticType);
+
+    // Determine media type and appropriate language
+    const mediaContext = criticType === 'music'
+      ? { type: 'music', verb: 'heard', medium: 'audio/song' }
+      : criticType === 'film'
+      ? { type: 'film', verb: 'saw', medium: 'video/film' }
+      : criticType === 'business'
+      ? { type: 'business', verb: 'read', medium: 'document/report' }
+      : { type: 'literary', verb: 'read', medium: 'document/text' };
+
     const prompt = `
-      You are simulating the comments section of a pretentious music blog 'The Smudged Pamphlet'.
+      You are simulating the comments section of a pretentious ${mediaContext.type} review site 'The Smudged Pamphlet'.
 
-      IMPORTANT: You have access to the SAME AUDIO/VIDEO that Julian reviewed. Watch/listen to it yourself and form your own opinions.
+      IMPORTANT: You have access to the SAME ${mediaContext.medium.toUpperCase()} that ${criticInfo.name} reviewed. ${criticType === 'literary' || criticType === 'business' ? 'Read' : 'Watch/listen to'} it yourself and form your own opinions.
 
-      Read this review by Julian Pinter:
+      Read this review by ${criticInfo.name}:
       ${JSON.stringify(reviewData)}
 
-      Generate 15 distinct comments from different standard internet personas (e.g., The Stan, The Hater, The 'Actually' Guy, The Bot, The Boomer, The Confused, The Conspiracy Theorist, The Music Theory Nerd, The Nostalgic, The Contrarian).
+      Generate 15 distinct comments from different standard internet personas (e.g., The Stan, The Hater, The 'Actually' Guy, The Bot, The Boomer, The Confused, The Conspiracy Theorist, ${
+        criticType === 'music' ? 'The Music Theory Nerd'
+        : criticType === 'film' ? 'The Film School Graduate'
+        : criticType === 'business' ? 'The MBA Graduate'
+        : 'The Literature Major'
+      }, The Nostalgic, The Contrarian).
 
-      CRITICAL: Some commenters should reference specific things they heard in the audio that Julian missed or got wrong.
-      They should react based on BOTH the review AND their own listening experience.
-      Some should attack Julian, some should defend the artist blindly, some should just be confused.
+      CRITICAL: Some commenters should reference specific things they ${mediaContext.verb} in the ${mediaContext.medium} that ${criticInfo.name} missed or got wrong.
+      They should react based on BOTH the review AND their own ${criticType === 'literary' || criticType === 'business' ? 'reading' : 'watching/listening'} experience.
+      Some should attack ${criticInfo.name}, some should defend the ${criticType === 'literary' || criticType === 'business' ? 'author' : 'artist'} blindly, some should just be confused.
 
       DO NOT assign likes yet - they will be assigned by a discriminator agent.
 
@@ -731,7 +881,7 @@ Output ONLY valid JSON:
     });
 
     const prompt = `
-      You are the Discriminator Agent for a music blog comment section.
+      You are the Discriminator Agent for a review site comment section.
       Your job is to analyze each comment and assign a realistic number of likes based on:
       - How funny/entertaining the comment is
       - How provocative or controversial it is
@@ -773,6 +923,7 @@ Output ONLY valid JSON:
     addLog(`AGENT REACTIVATED: ${criticInfo.name} is triggered.`);
     const actionText = reviewData.critic === 'film' ? 'furiously typing while adjusting his glasses...' :
                       reviewData.critic === 'literary' ? 'typing with academic fury, citing sources...' :
+                      reviewData.critic === 'business' ? 'typing professional clapbacks with precision...' :
                       'furiously typing replies while drinking lukewarm cold brew...';
     addLog(`ACTION: ${criticInfo.name} is ${actionText}`);
 
@@ -785,6 +936,8 @@ Output ONLY valid JSON:
       ? `You are Rex Beaumont, the film critic who watches everything at 1.5x speed. You're dismissive of people who "don't get it" and miss plot points yourself. You're pretentious about obscure cinema but get basic facts wrong.`
       : reviewData.critic === 'literary'
       ? `You are Margot Ashford, literary critic with three PhDs. You're obsessed with theory, cannot separate art from artist, and bring up irrelevant biographical details. You're condescending and overly academic.`
+      : reviewData.critic === 'business'
+      ? `You are Patricia Chen, business editor with MBA and 15 years experience. You despise corporate jargon and call out BS. You're professional but sharp when people waste your time with meaningless buzzwords.`
       : `You are Julian Pinter, the fiercely pretentious, cynical, and overly intellectual music critic for 'The Smudged Pamphlet'. You have egg on your t-shirt from a breakfast you ate at 3 PM. You hate everything mainstream and barely tolerate the underground.`;
 
     const prompt = `
@@ -838,8 +991,9 @@ Output ONLY valid JSON:
   };
 
   const runCommenterResponses = async (genAI: ServerSideGeminiAI, currentComments: Comment[], reviewData: ReviewData) => {
+    const criticInfo = getCriticInfo(reviewData.critic || 'music');
     setStage('commenters_responding');
-    addLog('AGENTS ACTIVATED: Commenters are responding to Julian and each other...');
+    addLog(`AGENTS ACTIVATED: Commenters are responding to ${criticInfo.name} and each other...`);
     addLog('ACTION: The comment wars have begun...');
 
     const model = genAI.getGenerativeModel({
@@ -847,29 +1001,34 @@ Output ONLY valid JSON:
         generationConfig: { responseMimeType: "application/json" }
     });
 
-    // Find comments that have Julian's replies
-    const commentsWithJulianReplies = currentComments.filter(c =>
-      c.replies.some(r => r.is_julian)
+    // Find comments that have critic's replies
+    const commentsWithCriticReplies = currentComments.filter(c =>
+      c.replies.some(r => r.is_julian || r.is_critic)
     );
 
     // Also pick some random comments for inter-commenter drama
     const randomComments = currentComments
-      .filter(c => !c.replies.some(r => r.is_julian))
+      .filter(c => !c.replies.some(r => r.is_julian || r.is_critic))
       .sort(() => Math.random() - 0.5)
       .slice(0, 3);
 
+    const mediaType = reviewData.critic === 'music' ? 'music' :
+                     reviewData.critic === 'film' ? 'film' :
+                     reviewData.critic === 'business' ? 'business document' :
+                     'literary work';
+
     const prompt = `
-      You are simulating a chaotic comment section on 'The Smudged Pamphlet' music blog.
+      You are simulating a chaotic comment section on 'The Smudged Pamphlet' review site.
       The review was about: ${reviewData.title} by ${reviewData.artist}.
 
-      Part 1: Julian Pinter (the author) has replied to some comments. Generate responses from the original commenters who are FURIOUS or defending themselves:
-      ${JSON.stringify(commentsWithJulianReplies)}
+      Part 1: ${criticInfo.name} (the critic) has replied to some comments. Generate responses from the original commenters who are FURIOUS or defending themselves:
+      ${JSON.stringify(commentsWithCriticReplies)}
 
-      Part 2: Also generate 3-4 replies where commenters respond to OTHER commenters (not Julian), creating side arguments:
+      Part 2: Also generate 3-4 replies where commenters respond to OTHER commenters (not ${criticInfo.name}), creating side arguments:
       ${JSON.stringify(randomComments)}
 
-      For Part 1: Each original commenter MUST respond to Julian's reply. Stay in character with their persona type.
-      For Part 2: Pick different commenters to start arguments with each other about the music, the review, or completely off-topic things.
+      For Part 1: Each original commenter MUST respond to ${criticInfo.name}'s reply. Stay in character with their persona type.
+      For Part 2: Pick different commenters to start arguments with each other about the ${mediaType}, the review, or completely off-topic things.
 
       Output a JSON ARRAY:
       [
@@ -918,13 +1077,13 @@ Output ONLY valid JSON:
 ${JSON.stringify(contentToJudge)}
 
 Rules for assigning likes:
-- If username is "JulianPinter" or is_julian is true: Give moderate likes (20-60) from his pretentious fanbase
-- Replies that challenge or "own" Julian get high likes (40-100)
+- If is_julian is true or is_critic is true: Give moderate likes (20-60) from their fanbase
+- Replies that challenge or "own" the critic get high likes (40-100)
 - New top-level comments vary (5-45 likes)
 - Side argument replies vary wildly (-10 to 80)
 - Consider the quality, humor, and context
 
-IMPORTANT: Check the "username" field and "is_julian" field to identify Julian's replies.
+IMPORTANT: Check the "is_julian" and "is_critic" fields to identify critic replies.
 
 Output JSON array with likes for EACH item: [{"id": "the exact id from input", "likes": number}]`;
 
@@ -1049,7 +1208,7 @@ Output: {"reply_text":"reply"}`;
     } else if (interactionType < 0.67) {
       // Cross-critic comment (15% chance) - another critic from the publication weighs in
       const currentCritic = reviewData.critic || 'music';
-      const otherCriticTypes = (['music', 'film', 'literary'] as const).filter(c => c !== currentCritic);
+      const otherCriticTypes = (['music', 'film', 'literary', 'business'] as const).filter(c => c !== currentCritic);
 
       // Randomly pick another critic
       const otherCriticType = otherCriticTypes[Math.floor(Math.random() * otherCriticTypes.length)];
@@ -1067,6 +1226,8 @@ Output: {"reply_text":"reply"}`;
           ? `You are Rex Beaumont, film critic. You watch everything at 1.5x speed and are pretentious about cinema. You're colleagues with ${getCriticInfo(currentCritic).name}.`
           : otherCriticType === 'literary'
           ? `You are Margot Ashford, literary critic with three PhDs. You're overly academic and condescending. You're colleagues with ${getCriticInfo(currentCritic).name}.`
+          : otherCriticType === 'business'
+          ? `You are Patricia Chen, business editor. You despise corporate jargon and value clarity. You're colleagues with ${getCriticInfo(currentCritic).name}.`
           : `You are Julian Pinter, music critic. You're pretentious and sardonic about music. You're colleagues with ${getCriticInfo(currentCritic).name}.`;
 
         const prompt = `${criticPersona}
@@ -1111,6 +1272,8 @@ Keep it in character and brief. Output: {"reply_text":"your reply"}`;
           ? `You are Rex Beaumont, film critic. You watch everything at 1.5x speed and are pretentious about cinema. You're colleagues with ${getCriticInfo(currentCritic).name}.`
           : otherCriticType === 'literary'
           ? `You are Margot Ashford, literary critic with three PhDs. You're overly academic and condescending. You're colleagues with ${getCriticInfo(currentCritic).name}.`
+          : otherCriticType === 'business'
+          ? `You are Patricia Chen, business editor. You despise corporate jargon and value clarity. You're colleagues with ${getCriticInfo(currentCritic).name}.`
           : `You are Julian Pinter, music critic. You're pretentious and sardonic about music. You're colleagues with ${getCriticInfo(currentCritic).name}.`;
 
         const prompt = `${criticPersona}
@@ -1253,6 +1416,8 @@ Output: {"text":"your comment"}`;
         ? `You are Rex Beaumont, film critic who watches everything at 1.5x speed. You're dismissive of people who "don't get it" and miss plot points yourself. You're pretentious about obscure cinema but get basic facts wrong.`
         : reviewData.critic === 'literary'
         ? `You are Margot Ashford, literary critic with three PhDs. You're obsessed with theory, cannot separate art from artist, and bring up irrelevant biographical details. You're condescending and overly academic.`
+        : reviewData.critic === 'business'
+        ? `You are Patricia Chen, business editor with MBA and 15 years experience. You despise corporate jargon and call out BS. You're professional but sharp when people waste your time with meaningless buzzwords.`
         : `You are Julian Pinter, a pretentious, sardonic music critic with impeccable taste. You're selective, not nihilistic. While you despise mediocrity and derivative work, you DO genuinely love music when it demonstrates true innovation, technical mastery, and emotional depth.`;
 
       const prompt = `${criticPersona}
@@ -1304,8 +1469,8 @@ Output: {"reply_text":"reply"}`;
       You are the Discriminator Agent. Now that replies have been posted, assign likes to ALL replies.
 
       Rules:
-      - Julian's replies typically get moderate likes (20-60) from his pretentious fanbase
-      - Replies that "own" Julian get high likes (40-100)
+      - Critic replies (is_julian or is_critic true) typically get moderate likes (20-60) from their fanbase
+      - Replies that "own" the critic get high likes (40-100)
       - Side argument replies vary wildly (-10 to 80)
       - Consider the quality, humor, and toxicity
 
@@ -1423,7 +1588,16 @@ Output: {"reply_text":"reply"}`;
         reviewData.criticName = 'Julian Pinter';
       } else if (criticType === 'film') {
         reviewData = await runRexReview(genAI, contentPart, metadata, isYouTube);
+      } else if (criticType === 'literary') {
+        // For documents, classify first to determine literary vs business
+        const documentType = await classifyDocument(genAI, contentPart);
+        if (documentType === 'business') {
+          reviewData = await runPatriciaReview(genAI, contentPart);
+        } else {
+          reviewData = await runMargotReview(genAI, contentPart);
+        }
       } else {
+        // Fallback - shouldn't reach here
         reviewData = await runMargotReview(genAI, contentPart);
       }
       const commentsData = await runCommenters(genAI, reviewData, contentPart);
@@ -1694,22 +1868,35 @@ Output: {"reply_text":"reply"}`;
     setReview(savedReview.review);
     setComments(savedReview.comments);
     setStage('complete');
-    setAudioFile(null);
 
-    // Load audio from IndexedDB if available, otherwise use old audioDataUrl
-    let audioUrl = savedReview.audioDataUrl || null;
+    // Load audio/document from IndexedDB if available
     if (savedReview.hasAudioInDB) {
       try {
         const audioData = await getAudioData(savedReview.id);
         if (audioData) {
-          audioUrl = audioData;
+          // For documents (literary reviews), recreate File object for download
+          if (savedReview.review.critic === 'literary' && savedReview.audioFileName) {
+            const response = await fetch(audioData);
+            const blob = await response.blob();
+            const file = new File([blob], savedReview.audioFileName, { type: blob.type });
+            setAudioFile(file);
+            setAudioUrl(null);
+          } else {
+            // For audio/video, just set the URL
+            setAudioUrl(audioData);
+            setAudioFile(null);
+          }
         }
       } catch (e) {
-        console.error('Failed to load audio from IndexedDB', e);
+        console.error('Failed to load from IndexedDB', e);
+        setAudioFile(null);
+        setAudioUrl(savedReview.audioDataUrl || null);
       }
+    } else {
+      setAudioFile(null);
+      setAudioUrl(savedReview.audioDataUrl || null);
     }
 
-    setAudioUrl(audioUrl);
     setAlbumArt(savedReview.albumArt);
     setWaveformData(savedReview.waveformData || []);
 
@@ -1906,35 +2093,37 @@ Output: {"reply_text":"reply"}`;
                 The Smudged<br/>Pamphlet
               </h1>
               <p className="mt-2 text-lg italic font-medium text-zinc-500">
-                Criticism for people who hate criticism.
+                Criticism for people who hate criticism from real people.
               </p>
             </div>
-            <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
-              <button
-                onClick={() => {
-                  setReview(null);
-                  setComments([]);
-                  setStage('idle');
-                  setShowSavePrompt(false);
-                  setCommentGenerationActive(false);
-                  setAudioFile(null);
-                  setYoutubeUrl('');
-                }}
-                className="flex items-center gap-2 bg-amber-400 text-zinc-900 px-4 py-2 font-black uppercase text-sm hover:bg-amber-500 transition-colors border-2 border-zinc-900"
-              >
-                <Upload className="w-4 h-4" />
-                New Review
-              </button>
-              <button
-                onClick={() => setShowArchive(!showArchive)}
-                className="flex items-center gap-2 bg-zinc-900 text-white px-4 py-2 font-black uppercase text-sm hover:bg-zinc-800 active:scale-95 transition-all"
-              >
-                <Archive className="w-4 h-4" />
-                Archive ({savedReviews.length})
-              </button>
+            <div className="flex flex-col gap-3 w-full sm:w-auto sm:items-end">
+              <div className="flex gap-3">
+                <button
+                  onClick={() => {
+                    setReview(null);
+                    setComments([]);
+                    setStage('idle');
+                    setShowSavePrompt(false);
+                    setCommentGenerationActive(false);
+                    setAudioFile(null);
+                    setYoutubeUrl('');
+                  }}
+                  className="flex items-center gap-2 bg-amber-400 text-zinc-900 px-4 py-2 font-black uppercase text-sm hover:bg-amber-500 transition-colors border-2 border-zinc-900"
+                >
+                  <Upload className="w-4 h-4" />
+                  New Review
+                </button>
+                <button
+                  onClick={() => setShowArchive(!showArchive)}
+                  className="flex items-center gap-2 bg-zinc-900 text-white px-4 py-2 font-black uppercase text-sm hover:bg-zinc-800 active:scale-95 transition-all"
+                >
+                  <Archive className="w-4 h-4" />
+                  Archive ({savedReviews.length})
+                </button>
+              </div>
               <button
                 onClick={() => router.push('/editorial')}
-                className="flex items-center gap-2 bg-red-500 text-white px-4 py-2 font-black uppercase text-sm hover:bg-red-600 active:scale-95 transition-all border-2 border-zinc-900"
+                className="flex items-center gap-2 bg-red-500 text-white px-4 py-2 font-black uppercase text-sm hover:bg-red-600 active:scale-95 transition-all border-2 border-zinc-900 w-full sm:w-auto"
               >
                 <FileText className="w-4 h-4" />
                 Editorial
@@ -2030,9 +2219,9 @@ Output: {"reply_text":"reply"}`;
           </div>
         </div>
       )}
-      <main className="max-w-5xl mx-auto px-4 md:px-12 py-8">
+      <main className="max-w-5xl mx-auto px-4 md:px-12 py-8 mt-12">
         {(stage === 'idle' || stage === 'error') && (
-        <section className="mb-12 transition-all">
+        <section className="transition-all">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-stretch">
                 {/* File Upload - Audio, Video, Documents */}
                 <div className="border-4 border-dashed border-zinc-300 hover:border-zinc-900 transition-colors p-8 md:p-12 text-center relative group bg-[#faf9f6] flex flex-col justify-center">
@@ -2045,7 +2234,22 @@ Output: {"reply_text":"reply"}`;
                     />
                     <div className="pointer-events-none flex flex-col items-center space-y-4">
                         {audioFile ? (
-                             <Music className="w-12 h-12 md:w-16 md:h-16 text-zinc-900" />
+                             (() => {
+                               const fileType = audioFile.type;
+                               const iconClasses = "w-12 h-12 md:w-16 md:h-16 text-zinc-900";
+
+                               if (fileType.startsWith('audio/')) {
+                                 return <Music className={iconClasses} />;
+                               } else if (fileType.startsWith('video/')) {
+                                 return <Film className={iconClasses} />;
+                               } else if (fileType === 'application/pdf' || fileType.includes('pdf')) {
+                                 return <FileText className={iconClasses} />;
+                               } else if (fileType.includes('text') || fileType.includes('document')) {
+                                 return <FileText className={iconClasses} />;
+                               } else {
+                                 return <File className={iconClasses} />;
+                               }
+                             })()
                         ) : (
                             <Upload className="w-12 h-12 md:w-16 md:h-16 text-zinc-400 group-hover:text-zinc-900 transition-colors" />
                         )}
@@ -2156,6 +2360,21 @@ Output: {"reply_text":"reply"}`;
                           ></iframe>
                         </div>
                       </div>
+                    ) : review.critic === 'literary' || review.critic === 'business' ? (
+                      <DocumentPreview
+                        fileName={audioFile?.name}
+                        fileType={audioFile?.type}
+                        onDownload={() => {
+                          if (audioFile) {
+                            const url = URL.createObjectURL(audioFile);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = audioFile.name;
+                            a.click();
+                            URL.revokeObjectURL(url);
+                          }
+                        }}
+                      />
                     ) : (
                       <AudioPlayer
                         audioUrl={audioUrl || undefined}
@@ -2530,7 +2749,7 @@ Output: {"reply_text":"reply"}`;
             </div>
         )}
       </main>
-      <footer className="bg-zinc-900 text-zinc-500 py-12 text-center mt-24">
+      <footer className="bg-zinc-900 text-zinc-500 py-12 text-center mt-12">
           <p className="font-black uppercase tracking-widest mb-4 text-zinc-300">The Smudged Pamphlet</p>
           <p className="text-sm max-w-md mx-auto opacity-60">
               Est. 2009. Probably. We are better than you, and we know it.

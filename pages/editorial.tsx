@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/router';
-import { ArrowLeft, FileText, Check, MessageSquare, Archive, X, ThumbsDown, ChevronDown } from 'lucide-react';
+import { ArrowLeft, FileText, Check, MessageSquare, Archive, X, ThumbsDown, ChevronDown, Zap } from 'lucide-react';
 import clsx from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { getAudioData } from '@/utils/db';
 
 const cn = (...inputs: any[]) => twMerge(clsx(inputs));
 
@@ -18,9 +19,16 @@ interface SavedReview {
     score: number;
     summary: string;
     body: string[];
-    critic?: 'music' | 'film' | 'literary';
+    critic?: 'music' | 'film' | 'literary' | 'business';
     criticName?: string;
   };
+  audioFileName?: string;
+  audioDataUrl?: string;
+  albumArt?: string;
+  waveformData?: number[];
+  hasAudioInDB?: boolean;
+  youtubeUrl?: string;
+  isYouTube?: boolean;
 }
 
 interface Reply {
@@ -32,7 +40,7 @@ interface Reply {
   likes: number;
   is_editor?: boolean;
   is_critic?: boolean;
-  critic?: 'music' | 'film' | 'literary';
+  critic?: 'music' | 'film' | 'literary' | 'business';
   replyingToUsername?: string;
   replyingToId?: string;
 }
@@ -47,7 +55,14 @@ interface Comment {
   replies: Reply[];
   is_editor?: boolean;
   is_critic?: boolean;
-  critic?: 'music' | 'film' | 'literary';
+  critic?: 'music' | 'film' | 'literary' | 'business';
+}
+
+interface Verdict {
+  mediaTitle: string;
+  mediaArtist: string;
+  verdict: 'ROCKS' | 'SUCKS';
+  reason: string;
 }
 
 interface SavedEditorial {
@@ -55,12 +70,13 @@ interface SavedEditorial {
   title: string;
   summary: string;
   body: string[];
+  verdicts: Verdict[];
   timestamp: number;
   reviewIds: string[];
   comments: Comment[];
 }
 
-type CriticType = 'music' | 'film' | 'literary';
+type CriticType = 'music' | 'film' | 'literary' | 'business';
 type StaffType = CriticType | 'editor';
 
 export default function Editorial() {
@@ -97,6 +113,16 @@ export default function Editorial() {
           color: 'emerald-400',
           avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=margotashford&top=straightAndStrand&eyebrows=raisedExcited',
           bio: 'Literary Critic, three PhDs and counting.'
+        };
+      case 'business':
+        return {
+          name: 'Patricia Chen',
+          username: 'PatriciaChen',
+          title: 'Business Editor',
+          publication: 'The Smudged Pamphlet',
+          color: 'blue-500',
+          avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=patriciachen&top=longHair&eyebrows=raisedExcitedNatural&eyes=happy&mouth=serious',
+          bio: 'Business Editor, zero tolerance for corporate jargon.'
         };
       case 'editor':
         return {
@@ -164,6 +190,41 @@ export default function Editorial() {
     try {
       const reviewsToComment = savedReviews.filter(r => selectedReviews.has(r.id));
 
+      // Build media parts array - retrieve actual media files
+      const mediaParts: any[] = [];
+
+      for (const review of reviewsToComment) {
+        if (review.isYouTube && review.youtubeUrl) {
+          // YouTube video - add as file URI
+          mediaParts.push({
+            fileData: {
+              fileUri: review.youtubeUrl
+            }
+          });
+        } else if (review.hasAudioInDB) {
+          // Audio/video file from IndexedDB
+          try {
+            const audioDataUrl = await getAudioData(review.id);
+            if (audioDataUrl) {
+              // Extract base64 data from data URL
+              const base64Match = audioDataUrl.match(/^data:([^;]+);base64,(.+)$/);
+              if (base64Match) {
+                const mimeType = base64Match[1];
+                const base64Data = base64Match[2];
+                mediaParts.push({
+                  inlineData: {
+                    data: base64Data,
+                    mimeType: mimeType
+                  }
+                });
+              }
+            }
+          } catch (e) {
+            console.error(`Failed to load media for review ${review.id}:`, e);
+          }
+        }
+      }
+
       const prompt = `You are Chuck Morrison, Editor-in-Chief of 'The Smudged Pamphlet'.
 
 YOUR CHARACTER:
@@ -183,10 +244,10 @@ But you're also:
 - A good writer in a populist, accessible style
 - Protective of your publication and your team
 
-THE MEDIA BEING REVIEWED:
+THE MEDIA YOU'VE CONSUMED:
 ${reviewsToComment.map(r => `"${r.title}" by ${r.artist}`).join(', ')}
 
-YOUR CRITICS' REVIEWS:
+YOUR CRITICS' REVIEWS OF THE SAME MEDIA:
 ${JSON.stringify(reviewsToComment.map(r => ({
   critic: r.review.criticName,
   mediaTitle: r.title,
@@ -196,37 +257,54 @@ ${JSON.stringify(reviewsToComment.map(r => ({
   body: r.review.body
 })))}
 
-Write an EDITORIAL COMMENTARY on these reviews.
+Write an EDITORIAL COMMENTARY combining YOUR OWN EXPERIENCE with the media AND your reaction to what your critics wrote.
 
-IMPORTANT: You're commenting on what your CRITICS WROTE, not reviewing the media yourself. You might:
-- Mention the actual media being reviewed (the albums/films/books)
-- Call out your critics' pretentious takes on that media
-- Defend how regular audiences actually experience this media
-- Question their scoring or analysis
+IMPORTANT: You've ACTUALLY WATCHED/LISTENED TO/READ the same media your critics reviewed. You can:
+- Reference specific moments, songs, scenes, or passages, pages, or documents YOU experienced
+- Compare YOUR gut reaction to what your critics said
+- Call out when they're being pretentious about something that was actually simple and fun
+- Defend what regular audiences would actually enjoy about this media
+- Question their scoring based on YOUR OWN experience
 
 Points to hit:
-- Call out pretentious language ("What does 'Bergmanesque' even mean, Rex?")
-- Defend the audience perspective ("People just want to have FUN")
-- Act as a foil to their elitism ("A 3.5? People loved this!")
+- Call out pretentious language ("What does 'Bergmanesque' even mean, Rex? I just saw a guy walking slowly!")
+- Share YOUR reaction as a regular viewer/listener ("This song ROCKS - who cares about 'post-modern irony'?")
+- Act as a foil to their elitism ("A 3.5? I loved the big guitar solo in the third track!")
 - Be funny and accessible
 - Show you care about quality journalism even if you disagree
 - Keep it SHORT and PUNCHY
 
-Write 3-4 paragraphs. No fancy words. Talk like a real person.
+Write 5-6 paragraphs. No fancy words. Talk like a real person.
+
+After the editorial, give your FINAL VERDICT on each piece of media. Binary choice: does it ROCK or does it SUCK?
 
 Output ONLY valid JSON:
 {
   "title": "Editorial title (punchy, no pretension)",
   "summary": "One sentence summary",
-  "body": ["paragraph1", "paragraph2", "paragraph3"]
+  "body": ["paragraph1", "paragraph2", "paragraph3"],
+  "verdicts": [
+    {
+      "mediaTitle": "exact title from the review",
+      "mediaArtist": "exact artist from the review",
+      "verdict": "ROCKS" or "SUCKS",
+      "reason": "One punchy sentence why (10-15 words max)"
+    }
+  ]
 }`;
+
+      // Build the content parts array - text prompt + all media
+      const contentParts = [
+        { text: prompt },
+        ...mediaParts
+      ];
 
       const response = await fetch('/api/gemini/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: 'gemini-2.5-pro',
-          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          contents: [{ role: 'user', parts: contentParts }],
           generationConfig: { responseMimeType: 'application/json' }
         })
       });
@@ -281,7 +359,7 @@ Output ONLY valid JSON:
 
       if (interactionType < 0.4) {
         // Critic comments on Chuck's editorial (40% chance)
-        const criticTypes: CriticType[] = ['music', 'film', 'literary'];
+        const criticTypes: CriticType[] = ['music', 'film', 'literary', 'business'];
         const criticType = criticTypes[Math.floor(Math.random() * criticTypes.length)];
         const criticInfo = getStaffInfo(criticType);
         const shouldReply = Math.random() < 0.5 && comments.length > 0;
@@ -294,6 +372,8 @@ Output ONLY valid JSON:
             ? `You are Rex Beaumont, film critic. You watch everything at 1.5x speed and are pretentious about cinema. Chuck Morrison is your boss.`
             : criticType === 'literary'
             ? `You are Margot Ashford, literary critic with three PhDs. You're overly academic and condescending. Chuck Morrison is your boss.`
+            : criticType === 'business'
+            ? `You are Patricia Chen, business editor. You despise corporate jargon and value clarity. Chuck Morrison is your boss.`
             : `You are Julian Pinter, music critic. You're pretentious and sardonic about music. Chuck Morrison is your boss.`;
 
           const prompt = `${criticPersona}
@@ -348,6 +428,8 @@ Keep it in character and brief. Output: {"reply_text":"your reply"}`;
             ? `You are Rex Beaumont, film critic. You watch everything at 1.5x speed and are pretentious about cinema. Chuck Morrison is your boss.`
             : criticType === 'literary'
             ? `You are Margot Ashford, literary critic with three PhDs. You're overly academic and condescending. Chuck Morrison is your boss.`
+            : criticType === 'business'
+            ? `You are Patricia Chen, business editor. You despise corporate jargon and value clarity. Chuck Morrison is your boss.`
             : `You are Julian Pinter, music critic. You're pretentious and sardonic about music. Chuck Morrison is your boss.`;
 
           const prompt = `${criticPersona}
@@ -718,7 +800,7 @@ Generate a new comment. Output: {"username":"name","persona_type":"type","text":
               </h2>
               <p className="text-zinc-600 mb-6">
                 Chuck will write an editorial commentary on the selected reviews. Pick the ones that
-                deserve his everyman take.
+                deserve his take.
               </p>
 
               {savedReviews.length === 0 ? (
@@ -798,6 +880,39 @@ Generate a new comment. Output: {"username":"name","persona_type":"type","text":
               <p className="text-2xl font-bold mb-8 text-zinc-700 leading-relaxed">
                 {editorial.summary}
               </p>
+
+              {/* Chuck's Verdicts */}
+              {editorial.verdicts && editorial.verdicts.length > 0 && (
+                <div className="mb-8 bg-zinc-900 border-4 border-red-500 p-6">
+                  <h3 className="text-2xl font-black uppercase text-white mb-4 flex items-center gap-2">
+                    <Zap className="w-6 h-6 text-red-500 fill-red-500" />
+                    Chuck&apos;s Verdict
+                  </h3>
+                  <div className="space-y-4">
+                    {editorial.verdicts.map((verdict: Verdict, idx: number) => (
+                      <div key={idx} className={`border-4 p-4 ${verdict.verdict === 'ROCKS' ? 'border-green-500 bg-green-950' : 'border-red-600 bg-red-950'}`}>
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex-1">
+                            <div className="text-white font-bold text-lg mb-1">
+                              &ldquo;{verdict.mediaTitle}&rdquo; by {verdict.mediaArtist}
+                            </div>
+                            <div className="text-zinc-300 text-sm italic">
+                              {verdict.reason}
+                            </div>
+                          </div>
+                          <div className={`shrink-0 px-6 py-3 font-black text-2xl uppercase tracking-wider border-4 ${
+                            verdict.verdict === 'ROCKS'
+                              ? 'bg-green-500 border-green-300 text-zinc-900'
+                              : 'bg-red-600 border-red-400 text-white'
+                          }`}>
+                            {verdict.verdict}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div className="prose prose-lg max-w-none">
                 {editorial.body.map((para: string, i: number) => (
@@ -911,14 +1026,16 @@ Generate a new comment. Output: {"username":"name","persona_type":"type","text":
                     ? 'border-red-500'
                     : criticInfo
                     ? (criticType === 'music' ? 'border-amber-400' :
-                       criticType === 'film' ? 'border-purple-400' : 'border-emerald-400')
+                       criticType === 'film' ? 'border-purple-400' :
+                       criticType === 'business' ? 'border-blue-500' : 'border-emerald-400')
                     : comment.persona_type === 'Human User' ? 'border-blue-400' : 'border-zinc-300';
 
                   const bgColor = editorInfo
                     ? 'bg-red-50'
                     : criticInfo
                     ? (criticType === 'music' ? 'bg-amber-50' :
-                       criticType === 'film' ? 'bg-purple-50' : 'bg-emerald-50')
+                       criticType === 'film' ? 'bg-purple-50' :
+                       criticType === 'business' ? 'bg-blue-50' : 'bg-emerald-50')
                     : comment.persona_type === 'Human User' ? 'bg-blue-50' : 'bg-white';
 
                   return (
@@ -950,7 +1067,8 @@ Generate a new comment. Output: {"username":"name","persona_type":"type","text":
                                   ? "bg-blue-600"
                                   : isCriticComment
                                   ? (criticType === 'music' ? 'bg-amber-500' :
-                                     criticType === 'film' ? 'bg-purple-500' : 'bg-emerald-500')
+                                     criticType === 'film' ? 'bg-purple-500' :
+                                     criticType === 'business' ? 'bg-blue-500' : 'bg-emerald-500')
                                   : "bg-zinc-400"
                               )}>
                                 {comment.persona_type}
@@ -1009,14 +1127,17 @@ Generate a new comment. Output: {"username":"name","persona_type":"type","text":
                               const borderColor = isEditor ? 'border-red-500' :
                                                  reply.critic === 'music' ? 'border-amber-400' :
                                                  reply.critic === 'film' ? 'border-purple-400' :
+                                                 reply.critic === 'business' ? 'border-blue-500' :
                                                  'border-emerald-400';
                               const textColor = isEditor ? 'text-red-500' :
                                                reply.critic === 'music' ? 'text-amber-400' :
                                                reply.critic === 'film' ? 'text-purple-400' :
+                                               reply.critic === 'business' ? 'text-blue-500' :
                                                'text-emerald-400';
                               const bgColor = isEditor ? 'bg-red-500' :
                                              reply.critic === 'music' ? 'bg-amber-400' :
                                              reply.critic === 'film' ? 'bg-purple-400' :
+                                             reply.critic === 'business' ? 'bg-blue-500' :
                                              'bg-emerald-400';
 
                               return (
