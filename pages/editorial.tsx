@@ -16,6 +16,9 @@ const INITIAL_COMMENT_MIN_DELAY_MS = 3000;
 const INITIAL_COMMENT_MAX_DELAY_MS = 8000;
 const AUTO_SAVE_DEBOUNCE_MS = 1000;
 
+// Constants for editorial generation
+const MAX_REVIEWS_PER_EDITORIAL = 5; // Prevent memory issues with large file loads
+
 interface SavedReview {
   id: string;
   title: string;
@@ -145,6 +148,11 @@ export default function Editorial() {
     if (newSelected.has(id)) {
       newSelected.delete(id);
     } else {
+      // Check if adding this would exceed the limit
+      if (newSelected.size >= MAX_REVIEWS_PER_EDITORIAL) {
+        alert(`Maximum ${MAX_REVIEWS_PER_EDITORIAL} reviews can be selected per editorial to prevent memory issues.`);
+        return;
+      }
       newSelected.add(id);
     }
     setSelectedReviews(newSelected);
@@ -152,6 +160,12 @@ export default function Editorial() {
 
   const generateEditorial = async () => {
     if (selectedReviews.size === 0) return;
+
+    // Extra safety check
+    if (selectedReviews.size > MAX_REVIEWS_PER_EDITORIAL) {
+      alert(`Too many reviews selected. Maximum is ${MAX_REVIEWS_PER_EDITORIAL}.`);
+      return;
+    }
 
     setIsGenerating(true);
 

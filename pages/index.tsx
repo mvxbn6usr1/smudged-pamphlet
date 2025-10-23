@@ -184,6 +184,10 @@ export default function SmudgedPamphlet() {
     }
   };
 
+  // Constants for organic comment generation timing
+  const COMMENT_THREAD_STAGGER_MS = 5000; // Delay between starting comment threads
+  const MAX_COMMENT_GENERATION_TIME_MS = 300000; // 5 minutes hard stop
+
   // Router to determine which critic handles the content
   type CriticType = 'music' | 'film' | 'literary' | 'business';
   type StaffType = CriticType | 'editor';
@@ -2059,10 +2063,10 @@ Output: {"reply_text":"reply"}`;
     // Start 1-2 parallel conversation threads (reduced from 2-4)
     const numThreads = 1 + Math.floor(Math.random() * 2); // 1-2 threads
     for (let i = 0; i < numThreads; i++) {
-      setTimeout(() => scheduleNext(), i * 5000); // Stagger start by 5 seconds
+      setTimeout(() => scheduleNext(), i * COMMENT_THREAD_STAGGER_MS);
     }
 
-    // Stop after 5 minutes - hard stop
+    // Stop after maximum generation time - hard stop
     const stopTimeout = setTimeout(() => {
       addLog('SYSTEM: 5 minutes elapsed - forcing comment section closure');
       setCommentGenerationActive(false);
@@ -2071,7 +2075,7 @@ Output: {"reply_text":"reply"}`;
       timeoutsRef.current.forEach((t: NodeJS.Timeout) => clearTimeout(t));
       timeoutsRef.current = [];
       addLog('SYSTEM: Comment section closed. Discussion archived.');
-    }, 5 * 60 * 1000);
+    }, MAX_COMMENT_GENERATION_TIME_MS);
     timeoutsRef.current.push(stopTimeout);
 
     return () => {
