@@ -308,7 +308,7 @@ export default function SmudgedPamphlet() {
           title: 'Business Editor',
           publication: 'The Smudged Pamphlet',
           color: 'blue-500',
-          avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=patriciachen&top=longHair&eyebrows=raisedExcitedNatural&eyes=happy&mouth=serious',
+          avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=patriciachen&top=straight01&eyebrows=raisedExcitedNatural&eyes=eyeRoll&mouth=serious&skinColor=edb98a',
           bio: 'Business Editor, zero tolerance for corporate jargon.'
         };
       case 'editor':
