@@ -115,6 +115,8 @@ export default function Editorial() {
   const organicTimerRef = useRef<NodeJS.Timeout | null>(null);
   const isMountedRef = useRef(true);
   const saveDebounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const commentGenerationActiveRef = useRef(false);
+  const commentsRef = useRef<Comment[]>([]);
 
   // Set up mounted ref cleanup
   useEffect(() => {
@@ -123,6 +125,11 @@ export default function Editorial() {
       isMountedRef.current = false;
     };
   }, []);
+
+  // Sync comments to ref
+  useEffect(() => {
+    commentsRef.current = comments;
+  }, [comments]);
 
   useEffect(() => {
     const storedReviews = localStorage.getItem('smudged_reviews');
@@ -333,6 +340,9 @@ Output ONLY valid JSON:
   const generateOrganicEditorialComment = useCallback(async () => {
     if (!editorial) return null;
 
+    // Get current comments from ref
+    const currentComments = commentsRef.current;
+
     try {
       const interactionType = Math.random();
 
@@ -341,10 +351,10 @@ Output ONLY valid JSON:
         const criticTypes: CriticType[] = ['music', 'film', 'literary', 'business'];
         const criticType = criticTypes[Math.floor(Math.random() * criticTypes.length)];
         const criticInfo = getStaffInfo(criticType);
-        const shouldReply = Math.random() < 0.5 && comments.length > 0;
+        const shouldReply = Math.random() < 0.7 && currentComments.length > 0;
 
         if (shouldReply) {
-          const allComments = comments.flatMap(c => [c, ...c.replies.map(r => ({ ...r, parentId: c.id }))]);
+          const allComments = currentComments.flatMap(c => [c, ...c.replies.map(r => ({ ...r, parentId: c.id }))]);
           const target: any = allComments[Math.floor(Math.random() * allComments.length)];
 
           const criticPersona = getCriticPersona(criticType, {
@@ -452,16 +462,17 @@ Keep it brief and in character. Output: {"text":"your comment"}`;
         }
       } else if (interactionType < 0.6) {
         // Chuck responds to comments (20% chance)
-        if (comments.length === 0) return null;
+        const shouldReply = currentComments.length > 0;
 
-        const allComments = comments.flatMap(c => [c, ...c.replies.map(r => ({ ...r, parentId: c.id }))]);
-        const target: any = allComments[Math.floor(Math.random() * allComments.length)];
+        if (shouldReply) {
+          const allComments = currentComments.flatMap(c => [c, ...c.replies.map(r => ({ ...r, parentId: c.id }))]);
+          const target: any = allComments[Math.floor(Math.random() * allComments.length)];
 
-        const chuckPersona = getCriticPersona('editor', {
-          context: 'editorial_comment'
-        });
+          const chuckPersona = getCriticPersona('editor', {
+            context: 'editorial_comment'
+          });
 
-        const prompt = `${chuckPersona}
+          const prompt = `${chuckPersona}
 
 You wrote this editorial:
 ${JSON.stringify(editorial)}
@@ -475,42 +486,92 @@ Keep it SHORT and ACCESSIBLE. Talk like a regular person.
 
 Output: {"reply_text":"your reply"}`;
 
-        const replyResponse = await fetch('/api/gemini/generate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            model: 'gemini-2.0-flash-exp',
-            contents: [{ role: 'user', parts: [{ text: prompt }] }],
-            generationConfig: { responseMimeType: 'application/json' }
-          })
-        });
+          const replyResponse = await fetch('/api/gemini/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: 'gemini-2.0-flash-exp',
+              contents: [{ role: 'user', parts: [{ text: prompt }] }],
+              generationConfig: { responseMimeType: 'application/json' }
+            })
+          });
 
-        if (!replyResponse.ok) return null;
-        const replyData = await replyResponse.json();
-        const replyText = replyData.parts?.[0]?.text || '{}';
-        const reply = JSON.parse(replyText);
+          if (!replyResponse.ok) return null;
+          const replyData = await replyResponse.json();
+          const replyText = replyData.parts?.[0]?.text || '{}';
+          const reply = JSON.parse(replyText);
 
-        return {
-          type: 'reply',
-          parentId: target.parentId || target.id,
-          data: {
-            id: `re${Date.now()}`,
-            username: 'ChuckMorrison',
-            persona_type: 'Editor-in-Chief',
-            timestamp: 'Just now',
-            text: reply.reply_text || reply.text,
-            likes: 0,
-            is_editor: true,
-            replyingToUsername: target.username,
-            replyingToId: target.id
-          }
-        };
+          return {
+            type: 'reply',
+            parentId: target.parentId || target.id,
+            data: {
+              id: `re${Date.now()}`,
+              username: 'ChuckMorrison',
+              persona_type: 'Editor-in-Chief',
+              timestamp: 'Just now',
+              text: reply.reply_text || reply.text,
+              likes: 0,
+              is_editor: true,
+              replyingToUsername: target.username,
+              replyingToId: target.id
+            }
+          };
+        } else {
+          // Chuck posts a new top-level comment on his own editorial
+          const chuckPersona = getCriticPersona('editor', {
+            context: 'editorial_comment'
+          });
+
+          const prompt = `${chuckPersona}
+
+You just published this editorial:
+${JSON.stringify(editorial)}
+
+Write a brief follow-up comment you might add to your own editorial. Maybe you:
+- Add something you forgot to mention
+- React to rereading what you wrote
+- Make a joke about your critics
+- Add emphasis to a key point
+
+Keep it SHORT and in your everyman voice.
+
+Output: {"text":"your comment"}`;
+
+          const commentResponse = await fetch('/api/gemini/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: 'gemini-2.0-flash-exp',
+              contents: [{ role: 'user', parts: [{ text: prompt }] }],
+              generationConfig: { responseMimeType: 'application/json' }
+            })
+          });
+
+          if (!commentResponse.ok) return null;
+          const commentResponseData = await commentResponse.json();
+          const commentText = commentResponseData.parts?.[0]?.text || '{}';
+          const commentData = JSON.parse(commentText);
+
+          return {
+            type: 'new_comment',
+            data: {
+              id: `c${Date.now()}`,
+              username: 'ChuckMorrison',
+              persona_type: 'Editor-in-Chief',
+              timestamp: 'Just now',
+              text: commentData.text,
+              likes: 0,
+              replies: [],
+              is_editor: true
+            }
+          };
+        }
       } else {
         // Random commenter (40% chance)
-        const shouldReply = Math.random() < 0.6 && comments.length > 0;
+        const shouldReply = Math.random() < 0.75 && currentComments.length > 0;
 
         if (shouldReply) {
-          const allComments = comments.flatMap(c => [c, ...c.replies.map(r => ({ ...r, parentId: c.id }))]);
+          const allComments = currentComments.flatMap(c => [c, ...c.replies.map(r => ({ ...r, parentId: c.id }))]);
           const target: any = allComments[Math.floor(Math.random() * allComments.length)];
 
           const prompt = `You're a random internet commenter reading this editorial about critics and their reviews:
@@ -589,10 +650,13 @@ Generate a new comment. Output: {"username":"name","persona_type":"type","text":
       console.error('Organic comment generation error:', error);
       return null;
     }
-  }, [editorial, comments]);
+  }, [editorial]);
 
   // useEffect for organic comment generation
   useEffect(() => {
+    // Sync ref with state
+    commentGenerationActiveRef.current = commentGenerationActive;
+
     if (!commentGenerationActive || !editorial) {
       if (organicTimerRef.current) {
         clearTimeout(organicTimerRef.current);
@@ -610,15 +674,23 @@ Generate a new comment. Output: {"username":"name","persona_type":"type","text":
     commentCountRef.current = 0;
 
     const generateNext = async () => {
-      if (commentCountRef.current >= MAX_ORGANIC_COMMENTS || !commentGenerationActive) {
+      if (commentCountRef.current >= MAX_ORGANIC_COMMENTS || !commentGenerationActiveRef.current) {
         setCommentGenerationActive(false);
+        commentGenerationActiveRef.current = false;
         setTypingIndicators([]);
         return;
       }
 
       // Show typing indicator
       const tempUsername = `User${Math.floor(Math.random() * 1000)}`;
-      const tempCommentId = Math.random() > 0.5 ? null : comments[Math.floor(Math.random() * comments.length)]?.id || null;
+      let tempCommentId = null;
+      // Get current comments for reply targeting
+      setComments(currentComments => {
+        tempCommentId = Math.random() > 0.5 && currentComments.length > 0
+          ? currentComments[Math.floor(Math.random() * currentComments.length)]?.id || null
+          : null;
+        return currentComments;
+      });
 
       if (!isMountedRef.current) return;
 
@@ -646,7 +718,7 @@ Generate a new comment. Output: {"username":"name","persona_type":"type","text":
       }
 
       // Schedule next comment
-      if (isMountedRef.current && commentCountRef.current < MAX_ORGANIC_COMMENTS && commentGenerationActive) {
+      if (isMountedRef.current && commentCountRef.current < MAX_ORGANIC_COMMENTS && commentGenerationActiveRef.current) {
         const delay = MIN_COMMENT_DELAY_MS + Math.random() * (MAX_COMMENT_DELAY_MS - MIN_COMMENT_DELAY_MS);
         organicTimerRef.current = setTimeout(generateNext, delay);
       }
@@ -662,7 +734,7 @@ Generate a new comment. Output: {"username":"name","persona_type":"type","text":
       }
       setTypingIndicators([]);
     };
-  }, [commentGenerationActive, editorial, comments, generateOrganicEditorialComment]);
+  }, [commentGenerationActive, editorial, generateOrganicEditorialComment]);
 
   // Auto-save comments to the current editorial in localStorage with debouncing
   useEffect(() => {
