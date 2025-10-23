@@ -593,14 +593,34 @@ Output ONLY valid JSON:
       });
 
       const classificationText = result.response.text();
-      const classification = JSON.parse(classificationText);
 
-      addLog(`CLASSIFICATION: ${classification.classification.toUpperCase()} (${classification.confidence} confidence)`);
-      addLog(`REASON: ${classification.reasoning}`);
+      // Validate JSON parsing
+      let classification;
+      try {
+        classification = JSON.parse(classificationText);
+      } catch (parseError) {
+        addLog('ERROR: Failed to parse classification JSON, defaulting to literary');
+        return 'literary';
+      }
 
-      return classification.classification as 'literary' | 'business';
+      // Validate classification value
+      if (!classification || typeof classification.classification !== 'string') {
+        addLog('ERROR: Invalid classification structure, defaulting to literary');
+        return 'literary';
+      }
+
+      const classValue = classification.classification.toLowerCase();
+      if (classValue !== 'literary' && classValue !== 'business') {
+        addLog(`WARNING: Invalid classification "${classValue}", defaulting to literary`);
+        return 'literary';
+      }
+
+      addLog(`CLASSIFICATION: ${classValue.toUpperCase()} (${classification.confidence || 'unknown'} confidence)`);
+      addLog(`REASON: ${classification.reasoning || 'No reasoning provided'}`);
+
+      return classValue as 'literary' | 'business';
     } catch (e: any) {
-      addLog('ERROR: Classification failed, defaulting to literary');
+      addLog(`ERROR: Classification failed (${e.message}), defaulting to literary`);
       return 'literary';
     }
   };
@@ -1631,8 +1651,12 @@ Output: {"reply_text":"reply"}`;
 
       try {
         await saveAudioData(reviewId, audioDataUrl);
-      } catch (e) {
+      } catch (e: any) {
         console.error('Failed to save audio to IndexedDB', e);
+        if (e.name === 'QuotaExceededError') {
+          addLog('ERROR: Storage quota exceeded. The audio file is too large or storage is full.');
+          addLog('TIP: Try clearing old reviews or using a smaller file.');
+        }
       }
     }
 
@@ -1687,9 +1711,14 @@ Output: {"reply_text":"reply"}`;
     try {
       await saveAudioData(reviewId, audioDataUrl);
       addLog('SUCCESS: Audio stored in IndexedDB.');
-    } catch (e) {
+    } catch (e: any) {
       console.error('Failed to save audio to IndexedDB', e);
-      addLog('WARNING: Could not save audio data.');
+      if (e.name === 'QuotaExceededError') {
+        addLog('ERROR: Storage quota exceeded. The audio file is too large or storage is full.');
+        addLog('TIP: Try clearing old reviews or using a smaller file.');
+      } else {
+        addLog('WARNING: Could not save audio data.');
+      }
     }
 
     const newReview: SavedReview = {

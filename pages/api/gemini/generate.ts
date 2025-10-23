@@ -6,10 +6,37 @@ const requestCounts = new Map<string, { count: number; resetTime: number }>();
 
 const RATE_LIMIT = 50; // requests per window (lower for expensive AI calls)
 const RATE_WINDOW = 60 * 60 * 1000; // 1 hour
+const MAX_ENTRIES = 10000; // Maximum entries before cleanup
+
+function cleanupExpiredEntries() {
+  const now = Date.now();
+  let cleanedCount = 0;
+
+  for (const [ip, record] of requestCounts.entries()) {
+    if (now > record.resetTime) {
+      requestCounts.delete(ip);
+      cleanedCount++;
+    }
+  }
+
+  if (cleanedCount > 0) {
+    console.log(`[Rate Limit] Cleaned up ${cleanedCount} expired entries`);
+  }
+}
 
 function checkRateLimit(ip: string): boolean {
   const now = Date.now();
   const record = requestCounts.get(ip);
+
+  // Cleanup if map grows too large
+  if (requestCounts.size > MAX_ENTRIES) {
+    cleanupExpiredEntries();
+    // If still too large after cleanup, clear all
+    if (requestCounts.size > MAX_ENTRIES) {
+      console.warn('[Rate Limit] Map size exceeded maximum, clearing all entries');
+      requestCounts.clear();
+    }
+  }
 
   if (!record || now > record.resetTime) {
     requestCounts.set(ip, { count: 1, resetTime: now + RATE_WINDOW });

@@ -25,7 +25,7 @@ export default function DocumentPreview({ fileName, fileType, onDownload }: Docu
 
     if (fileType === 'application/pdf' || fileType.includes('pdf')) {
       return 'PDF Document';
-    } else if (fileType.includes('text/plain')) {
+    } else if (fileType === 'text/plain' || fileType.startsWith('text/')) {
       return 'Text Document';
     } else if (fileType.includes('document')) {
       return 'Document';

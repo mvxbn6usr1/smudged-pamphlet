@@ -591,6 +591,11 @@ Generate a new comment. Output: {"username":"name","persona_type":"type","text":
       return;
     }
 
+    // Prevent race condition: only reset if not already generating
+    if (commentCountRef.current > 0 && organicTimerRef.current) {
+      return; // Already generating, don't restart
+    }
+
     commentCountRef.current = 0;
 
     const generateNext = async () => {
