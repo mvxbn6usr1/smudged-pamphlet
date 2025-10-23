@@ -4,7 +4,8 @@ import { ArrowLeft, FileText, Check, MessageSquare, Archive, X, ThumbsDown, Chev
 import clsx from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { getAudioData } from '@/utils/db';
-import { getStaffInfo as getStaffInfoUtil } from '@/utils/critics';
+import { getStaffInfo as getStaffInfoUtil, getCriticInfo as getCriticInfoUtil, getCriticPersona } from '@/utils/critics';
+import type { CriticType } from '@/utils/critics';
 
 const cn = (...inputs: any[]) => twMerge(clsx(inputs));
 
@@ -88,7 +89,6 @@ interface SavedEditorial {
   comments: Comment[];
 }
 
-type CriticType = 'music' | 'film' | 'literary' | 'business';
 type StaffType = CriticType | 'editor';
 
 export default function Editorial() {
@@ -96,6 +96,7 @@ export default function Editorial() {
 
   // Use shared utility for critic/staff info
   const getStaffInfo = getStaffInfoUtil;
+  const getCriticInfo = getCriticInfoUtil;
 
   const [savedReviews, setSavedReviews] = useState<SavedReview[]>([]);
   const [selectedReviews, setSelectedReviews] = useState<Set<string>>(new Set());
@@ -216,24 +217,11 @@ export default function Editorial() {
         }
       }
 
-      const prompt = `You are Chuck Morrison, Editor-in-Chief of 'The Smudged Pamphlet'.
+      const chuckPersona = getCriticPersona('editor', {
+        context: 'editorial'
+      });
 
-YOUR CHARACTER:
-You're an everyman. No fancy words, no pretentious nonsense. You like your meat red, your women blonde, your movies with explosions, your music loud and epic, and your words short and easy to read.
-
-You're the voice of the AUDIENCE against your pretentious critics. You don't care about "deconstructing narrative theory" or "Bergmanesque cinematography" or "post-modern irony." You care if something ROCKS or if it SUCKS.
-
-You're annoying to your critics because:
-- You call them out when they're being too pretentious
-- You advocate for the common viewer/listener/reader
-- You're their boss, but you don't act like an intellectual
-- You sometimes just... don't get what they're going on about
-
-But you're also:
-- Fair when something genuinely deserves praise
-- Funny and self-aware
-- A good writer in a populist, accessible style
-- Protective of your publication and your team
+      const prompt = `${chuckPersona}
 
 THE MEDIA YOU'VE CONSUMED:
 ${reviewsToComment.map(r => `"${r.title}" by ${r.artist}`).join(', ')}
@@ -359,13 +347,11 @@ Output ONLY valid JSON:
           const allComments = comments.flatMap(c => [c, ...c.replies.map(r => ({ ...r, parentId: c.id }))]);
           const target: any = allComments[Math.floor(Math.random() * allComments.length)];
 
-          const criticPersona = criticType === 'film'
-            ? `You are Rex Beaumont, film critic. You watch everything at 1.5x speed and are pretentious about cinema. Chuck Morrison is your boss.`
-            : criticType === 'literary'
-            ? `You are Margot Ashford, literary critic with three PhDs. You're overly academic and condescending. Chuck Morrison is your boss.`
-            : criticType === 'business'
-            ? `You are Patricia Chen, business editor. You despise corporate jargon and value clarity. Chuck Morrison is your boss.`
-            : `You are Julian Pinter, music critic. You're pretentious and sardonic about music. Chuck Morrison is your boss.`;
+          const criticPersona = getCriticPersona(criticType, {
+            context: 'colleague_comment',
+            colleagueName: 'Chuck Morrison',
+            isBoss: true
+          });
 
           const prompt = `${criticPersona}
 
@@ -415,13 +401,11 @@ Keep it in character and brief. Output: {"reply_text":"your reply"}`;
             }
           };
         } else {
-          const criticPersona = criticType === 'film'
-            ? `You are Rex Beaumont, film critic. You watch everything at 1.5x speed and are pretentious about cinema. Chuck Morrison is your boss.`
-            : criticType === 'literary'
-            ? `You are Margot Ashford, literary critic with three PhDs. You're overly academic and condescending. Chuck Morrison is your boss.`
-            : criticType === 'business'
-            ? `You are Patricia Chen, business editor. You despise corporate jargon and value clarity. Chuck Morrison is your boss.`
-            : `You are Julian Pinter, music critic. You're pretentious and sardonic about music. Chuck Morrison is your boss.`;
+          const criticPersona = getCriticPersona(criticType, {
+            context: 'colleague_comment',
+            colleagueName: 'Chuck Morrison',
+            isBoss: true
+          });
 
           const prompt = `${criticPersona}
 
@@ -473,7 +457,11 @@ Keep it brief and in character. Output: {"text":"your comment"}`;
         const allComments = comments.flatMap(c => [c, ...c.replies.map(r => ({ ...r, parentId: c.id }))]);
         const target: any = allComments[Math.floor(Math.random() * allComments.length)];
 
-        const prompt = `You are Chuck Morrison, Editor-in-Chief of 'The Smudged Pamphlet'.
+        const chuckPersona = getCriticPersona('editor', {
+          context: 'editorial_comment'
+        });
+
+        const prompt = `${chuckPersona}
 
 You wrote this editorial:
 ${JSON.stringify(editorial)}
@@ -481,7 +469,7 @@ ${JSON.stringify(editorial)}
 Someone commented:
 ${JSON.stringify(target)}
 
-Write a brief reply. You're the everyman editor - no fancy words, you defend the audience, call out pretension, and keep it REAL.
+Write a brief reply.
 
 Keep it SHORT and ACCESSIBLE. Talk like a regular person.
 
