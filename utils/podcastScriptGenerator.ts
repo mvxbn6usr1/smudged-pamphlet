@@ -63,7 +63,8 @@ export async function generatePodcastScript(
         audioFileName: options.audioFileName,
         isYouTube: options.isYouTube,
         documentFileName: options.documentFileName,
-        criticType: options.criticType
+        criticType: options.criticType,
+        comments: options.comments
       }
     );
   }
@@ -81,7 +82,7 @@ async function generateOneOnOnePodcast(
   summary: string,
   body: string[],
   notableLyrics?: string,
-  options?: Pick<PodcastGenerationOptions, 'youtubeUrl' | 'audioFileName' | 'isYouTube' | 'documentFileName' | 'criticType'>
+  options?: Pick<PodcastGenerationOptions, 'youtubeUrl' | 'audioFileName' | 'isYouTube' | 'documentFileName' | 'criticType' | 'comments'>
 ): Promise<PodcastScript[]> {
   const reviewBodyText = body.join('\n\n');
 
@@ -127,6 +128,16 @@ ${notableLyrics ? `- Notable Quote: "${notableLyrics}"` : ''}${mediaContext}
 REVIEW CONTENT:
 ${reviewBodyText}
 
+IMPORTANT - READER COMMENTS CONTEXT:
+The review generated discussion. Here are some of the comments/reactions:
+${options?.comments && options.comments.length > 0
+  ? options.comments.slice(0, 5).map((c: any) =>
+      `- ${c.username}: "${c.text}"`
+    ).join('\n')
+  : '(No comments yet)'}
+
+Use these comments to inform the discussion - Chuck might bring up interesting points readers made, or the critic might address criticisms.
+
 PODCAST GUIDELINES:
 1. Chuck opens the show warmly, introduces the guest and the work being discussed
 2. Chuck asks the critic to explain their review and score
@@ -134,28 +145,33 @@ PODCAST GUIDELINES:
 4. Chuck should challenge overly pretentious takes (he's the everyman defender)
 5. The critic should defend their perspective using examples from the review
 6. Include 2-3 back-and-forth exchanges that dig deeper into specific points
-7. Chuck wraps up with a brief closing statement
-8. Keep the total conversation to 15-25 exchanges (not too long)
-9. Use casual language, contractions, filler words ("you know", "I mean", "like")
-10. Make it sound like two people actually talking, not reading a script
+7. Reference the reader comments when relevant - "Some readers said..." or "One commenter argued..."
+8. Chuck wraps up with a brief closing statement
+9. Keep the total conversation to 15-25 exchanges (not too long)
+10. Use casual language, contractions, filler words ("you know", "I mean", "like", "uh", "um")
+11. Include vocalizations and reactions in asterisks: *sighs*, *laughs*, *scoffs*, *groans*, *chuckles*, *pauses*
+12. Use phatic expressions: "Right?", "You see?", "Come on", "Seriously?", "Yeah, yeah", "Hold on", "Wait, wait"
+13. Make it sound like two people actually talking, not reading a script - be messy, overlap, interrupt
 
 FORMAT:
 Return ONLY the script in this exact format (no additional commentary):
 
-Chuck: [opening line]
-${criticInfo.name}: [response]
+Chuck: [opening line with vocalizations like *chuckles* or *sighs* embedded naturally]
+${criticInfo.name}: [response with reactions like *scoffs* or *laughs*]
 Chuck: [next line]
 ${criticInfo.name}: [response]
 ...and so on
 
-DO NOT include any stage directions, descriptions, or markdown. JUST the dialogue with "SpeakerName: Line" format.`;
+IMPORTANT: Include vocalizations WITHIN the dialogue text, like: "Well *chuckles* I don't know about that" or "*sighs* Look, here's the thing..."
+
+DO NOT include stage directions outside the dialogue. Keep it in "SpeakerName: Line" format with vocalizations embedded.`;
 
   try {
     const response = await fetch('/api/gemini/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'gemini-2.0-flash-exp',
+        model: 'gemini-2.5-pro',
         contents: [
           {
             role: 'user',
@@ -164,7 +180,7 @@ DO NOT include any stage directions, descriptions, or markdown. JUST the dialogu
         ],
         generationConfig: {
           temperature: 0.9, // Higher temperature for more creative dialogue
-          maxOutputTokens: 2048,
+          maxOutputTokens: 65535,
         }
       }),
     });
@@ -246,7 +262,12 @@ REVIEW CONTENT:
 ${reviewBodyText}
 
 EDITORIAL COMMENTS TO REFERENCE:
-${comments.map(c => `${c.username}: ${c.text}`).join('\n')}
+${comments.slice(0, 10).map(c => {
+  const replies = c.replies?.slice(0, 2).map((r: any) => `  └─ ${r.username}: ${r.text}`).join('\n') || '';
+  return `${c.username}: ${c.text}${replies ? '\n' + replies : ''}`;
+}).join('\n')}
+
+These comments represent the discussion this editorial sparked. Reference them naturally - critics might defend their positions, Chuck might bring up reader points.
 
 ROUNDTABLE GUIDELINES:
 1. Chuck opens the show, introduces the work and all panelists
@@ -254,33 +275,39 @@ ROUNDTABLE GUIDELINES:
 3. Other critics chime in with agreements, disagreements, or different perspectives
 4. Chuck moderates - asks follow-up questions, manages speaking time, keeps it moving
 5. Critics should reference each other's points ("I agree with [Name] that...", "But [Name], you're missing...")
-6. Include some tension/debate but keep it professional and witty
-7. Each critic should speak at least 3-4 times
-8. Chuck should speak frequently to guide the conversation
-9. End with Chuck asking each critic for a final thought (one sentence each)
-10. Chuck gives a brief closing
-11. Total: 25-40 exchanges for a longer editorial discussion
-12. Sound natural - use interruptions, "hold on", "wait", "exactly!", etc.
+6. Reference the reader comments when relevant - "One reader pointed out..." or "People in the comments are saying..."
+7. Include some tension/debate but keep it professional and witty
+8. Each critic should speak at least 3-4 times
+9. Chuck should speak frequently to guide the conversation
+10. End with Chuck asking each critic for a final thought (one sentence each)
+11. Chuck gives a brief closing
+12. Total: 25-40 exchanges for a longer editorial discussion
+13. Use casual language, contractions, filler words ("you know", "I mean", "like", "uh", "um")
+14. Include vocalizations and reactions in asterisks: *sighs*, *laughs*, *scoffs*, *groans*, *chuckles*, *pauses*
+15. Use phatic expressions: "Right?", "You see?", "Come on", "Seriously?", "Yeah, yeah", "Hold on", "Wait, wait"
+16. Sound natural - be messy, overlap, interrupt, talk over each other
 
 FORMAT:
 Return ONLY the script in this exact format (no additional commentary):
 
-Chuck: [opening line]
-${criticInfos[0]?.name || 'Critic'}: [response]
-Chuck: [next line]
-${criticInfos[1]?.name || 'Critic'}: [response]
+Chuck: [opening line with vocalizations like *chuckles* or *sighs* embedded naturally]
+${criticInfos[0]?.name || 'Critic'}: [response with reactions]
+Chuck: [moderating comment]
+${criticInfos[1]?.name || 'Critic'}: [response with reactions like *scoffs* or *laughs*]
 ...and so on
 
 Use exact names: "Chuck", "${criticInfos.map(c => c.name).join('", "')}"
 
-DO NOT include any stage directions, descriptions, or markdown. JUST the dialogue with "SpeakerName: Line" format.`;
+IMPORTANT: Include vocalizations WITHIN the dialogue text, like: "Well *chuckles* I don't know about that" or "*sighs* Look, here's the thing..."
+
+DO NOT include stage directions outside the dialogue. Keep it in "SpeakerName: Line" format with vocalizations embedded.`;
 
   try {
     const response = await fetch('/api/gemini/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'gemini-2.0-flash-exp',
+        model: 'gemini-2.5-pro',
         contents: [
           {
             role: 'user',
@@ -289,7 +316,7 @@ DO NOT include any stage directions, descriptions, or markdown. JUST the dialogu
         ],
         generationConfig: {
           temperature: 0.9, // Higher temperature for more creative dialogue
-          maxOutputTokens: 3072, // More tokens for longer roundtable discussions
+          maxOutputTokens: 65535, // More tokens for longer roundtable discussions
         }
       }),
     });
@@ -367,8 +394,8 @@ function getVocalStyleForCritic(criticName: string): string {
 export function getVoiceForSpeaker(speakerName: string): string {
   const voiceMap: Record<string, string> = {
     // Chuck Morrison - everyman, straightforward, warm
-    'Chuck': 'Kore', // Firm voice
-    'Chuck Morrison': 'Kore',
+    'Chuck': 'Algieba', // Firm voice
+    'Chuck Morrison': 'Algieba',
 
     // Julian Pinter - pretentious, sardonic music critic
     'Julian': 'Puck', // Upbeat but can sound sarcastic
@@ -379,12 +406,12 @@ export function getVoiceForSpeaker(speakerName: string): string {
     'Rex Beaumont': 'Algenib',
 
     // Margot Ashford - academic literary critic
-    'Margot': 'Sadaltager', // Knowledgeable, measured
-    'Margot Ashford': 'Sadaltager',
+    'Margot': 'Gacrux', // Knowledgeable, measured
+    'Margot Ashford': 'Gacrux',
 
     // Patricia Chen - no-nonsense business editor
-    'Patricia': 'Alnilam', // Firm, professional
-    'Patricia Chen': 'Alnilam',
+    'Patricia': 'Sulafat', // Firm, professional
+    'Patricia Chen': 'Sulafat',
   };
 
   return voiceMap[speakerName] || 'Kore'; // Default to Kore if not found
