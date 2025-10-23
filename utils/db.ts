@@ -61,3 +61,19 @@ export async function deleteAudioData(id: string): Promise<void> {
     request.onsuccess = () => resolve();
   });
 }
+
+// Podcast-specific storage helpers
+export async function savePodcastAudio(reviewId: string, audioData: string): Promise<void> {
+  const podcastKey = `podcast-${reviewId}`;
+  return saveAudioData(podcastKey, audioData);
+}
+
+export async function getPodcastAudio(reviewId: string): Promise<string | undefined> {
+  const podcastKey = `podcast-${reviewId}`;
+  return getAudioData(podcastKey);
+}
+
+export async function deletePodcastAudio(reviewId: string): Promise<void> {
+  const podcastKey = `podcast-${reviewId}`;
+  return deleteAudioData(podcastKey);
+}

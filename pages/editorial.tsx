@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/router';
-import { ArrowLeft, FileText, Check, MessageSquare, Archive, X, ThumbsDown, ChevronDown, Zap } from 'lucide-react';
+import { ArrowLeft, FileText, Check, MessageSquare, Archive, X, ThumbsDown, ChevronDown, Zap, Podcast } from 'lucide-react';
 import clsx from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { getAudioData } from '@/utils/db';
 import { getStaffInfo as getStaffInfoUtil, getCriticInfo as getCriticInfoUtil, getCriticPersona } from '@/utils/critics';
 import type { CriticType } from '@/utils/critics';
+import { generatePodcast, getExistingPodcast, type PodcastGenerationProgress } from '@/utils/podcastOrchestrator';
+import AudioPlayer from '@/components/AudioPlayer';
 
 const cn = (...inputs: any[]) => twMerge(clsx(inputs));
 
@@ -111,6 +113,11 @@ export default function Editorial() {
   const [commentGenerationActive, setCommentGenerationActive] = useState(false);
   const [typingIndicators, setTypingIndicators] = useState<Array<{username: string, commentId: string | null}>>([]);
   const [isPostingComment, setIsPostingComment] = useState(false);
+
+  // Podcast state
+  const [podcastUrl, setPodcastUrl] = useState<string | undefined>();
+  const [isPodcastGenerating, setIsPodcastGenerating] = useState(false);
+  const [podcastProgress, setPodcastProgress] = useState<PodcastGenerationProgress | null>(null);
   const commentCountRef = useRef(0);
   const organicTimerRef = useRef<NodeJS.Timeout | null>(null);
   const isMountedRef = useRef(true);
@@ -150,6 +157,72 @@ export default function Editorial() {
       }
     }
   }, []);
+
+  // Load existing podcast when editorial changes
+  useEffect(() => {
+    if (editorial?.id) {
+      const loadPodcast = async () => {
+        try {
+          const existingPodcast = await getExistingPodcast(editorial.id);
+          if (existingPodcast) {
+            setPodcastUrl(existingPodcast);
+          } else {
+            setPodcastUrl(undefined);
+          }
+        } catch (e) {
+          console.error('Failed to check for podcast', e);
+        }
+      };
+      loadPodcast();
+    } else {
+      setPodcastUrl(undefined);
+    }
+  }, [editorial?.id]);
+
+  const handleGenerateEditorialPodcast = async () => {
+    if (!editorial || !editorial.id) return;
+
+    // Create a review-like object for the podcast generator
+    const editorialReview = {
+      id: editorial.id,
+      title: editorial.title,
+      artist: 'Editorial Discussion',
+      review: {
+        score: 0, // Not applicable for editorials
+        summary: editorial.summary,
+        body: editorial.body,
+        critic: 'music' as const, // Default, will be overridden by participants
+        criticName: 'Editorial Team',
+      },
+      comments,
+    };
+
+    setIsPodcastGenerating(true);
+    setPodcastProgress({
+      status: 'generating_script',
+      progress: 0,
+      message: 'Starting editorial roundtable podcast...',
+    });
+
+    try {
+      const audioDataUrl = await generatePodcast(editorialReview, true, (progress) => {
+        setPodcastProgress(progress);
+      });
+
+      setPodcastUrl(audioDataUrl);
+      setIsPodcastGenerating(false);
+      setPodcastProgress(null);
+    } catch (error) {
+      console.error('Failed to generate podcast:', error);
+      setIsPodcastGenerating(false);
+      setPodcastProgress({
+        status: 'error',
+        progress: 0,
+        message: 'Failed to generate podcast',
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  };
 
   const toggleReview = (id: string) => {
     const newSelected = new Set(selectedReviews);
@@ -1010,6 +1083,73 @@ Generate a new comment. Output: {"username":"name","persona_type":"type","text":
                 </div>
               </div>
             </div>
+
+            {/* Podcast Section */}
+            <section className="mt-12 bg-white border-2 border-zinc-900 p-8 shadow-[4px_4px_0px_0px_rgba(24,24,27,1)]">
+              <div className="flex items-center gap-3 mb-6">
+                <Podcast className="w-6 h-6" />
+                <h3 className="text-2xl font-black uppercase tracking-tight">
+                  Editorial Roundtable Podcast
+                </h3>
+              </div>
+
+              {podcastUrl ? (
+                <div className="space-y-4">
+                  <p className="text-zinc-600 italic">
+                    Listen to Chuck Morrison host a roundtable discussion with the critics about this editorial.
+                  </p>
+                  <AudioPlayer
+                    audioUrl={podcastUrl}
+                    audioFileName={`editorial-${editorial.id}-podcast.wav`}
+                  />
+                </div>
+              ) : isPodcastGenerating ? (
+                <div className="space-y-4">
+                  <div className="bg-zinc-100 border-2 border-zinc-900 p-6">
+                    <div className="flex items-center gap-4 mb-4">
+                      <div className="animate-spin w-8 h-8 border-4 border-zinc-900 border-t-transparent rounded-full"></div>
+                      <div className="flex-1">
+                        <div className="font-black uppercase text-sm mb-1">
+                          {podcastProgress?.status === 'generating_script' && 'Generating Roundtable Script'}
+                          {podcastProgress?.status === 'generating_audio' && 'Generating Multi-Speaker Audio'}
+                          {podcastProgress?.status === 'complete' && 'Complete'}
+                          {podcastProgress?.status === 'error' && 'Error'}
+                        </div>
+                        <div className="text-sm text-zinc-600">
+                          {podcastProgress?.message || 'Processing...'}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="w-full bg-zinc-300 h-2 border border-zinc-900">
+                      <div
+                        className="bg-zinc-900 h-full transition-all duration-300"
+                        style={{ width: `${podcastProgress?.progress || 0}%` }}
+                      />
+                    </div>
+                    {podcastProgress?.error && (
+                      <div className="mt-4 p-4 bg-red-100 border border-red-600 text-red-800 text-sm">
+                        {podcastProgress.error}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <p className="text-zinc-600">
+                    Want to hear a roundtable discussion about this editorial? Generate a podcast where Chuck Morrison
+                    hosts a conversation with all the critics who participated in the comments about
+                    &quot;{editorial.title}&quot;.
+                  </p>
+                  <button
+                    onClick={handleGenerateEditorialPodcast}
+                    className="flex items-center gap-2 bg-zinc-900 text-white px-6 py-3 font-black uppercase text-sm hover:bg-zinc-800 transition-colors"
+                  >
+                    <Podcast className="w-5 h-5" />
+                    Generate Roundtable Podcast
+                  </button>
+                </div>
+              )}
+            </section>
 
             {/* Comments Section */}
             <section className="mt-12 bg-white border-2 border-zinc-900 p-8 shadow-[4px_4px_0px_0px_rgba(24,24,27,1)]">

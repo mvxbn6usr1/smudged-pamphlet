@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
-import { MessageSquare, ThumbsDown, ShieldAlert, ChevronDown, ArrowLeft } from 'lucide-react';
+import { MessageSquare, ThumbsDown, ShieldAlert, ChevronDown, ArrowLeft, Podcast } from 'lucide-react';
 import clsx from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import AudioPlayer from '@/components/AudioPlayer';
 import DocumentPreview from '@/components/DocumentPreview';
 import { getAudioData } from '@/utils/db';
 import { getCriticInfo as getCriticInfoUtil } from '@/utils/critics';
+import { generatePodcast, getExistingPodcast, type PodcastGenerationProgress } from '@/utils/podcastOrchestrator';
 
 function cn(...inputs: any[]) {
   return twMerge(clsx(inputs));
@@ -88,6 +89,11 @@ export default function ReviewPage() {
   const [audioUrl, setAudioUrl] = useState<string | undefined>();
   const [documentFile, setDocumentFile] = useState<File | null>(null);
 
+  // Podcast state
+  const [podcastUrl, setPodcastUrl] = useState<string | undefined>();
+  const [isPodcastGenerating, setIsPodcastGenerating] = useState(false);
+  const [podcastProgress, setPodcastProgress] = useState<PodcastGenerationProgress | null>(null);
+
   useEffect(() => {
     if (!slug) return;
 
@@ -127,6 +133,16 @@ export default function ReviewPage() {
               setAudioUrl(foundReview.audioDataUrl);
               setDocumentFile(null);
             }
+
+            // Check for existing podcast
+            try {
+              const existingPodcast = await getExistingPodcast(foundReview.id);
+              if (existingPodcast) {
+                setPodcastUrl(existingPodcast);
+              }
+            } catch (e) {
+              console.error('Failed to check for podcast', e);
+            }
           } else {
             router.push('/');
           }
@@ -141,6 +157,36 @@ export default function ReviewPage() {
 
     loadReviewData();
   }, [slug, router]);
+
+  const handleGeneratePodcast = async () => {
+    if (!review) return;
+
+    setIsPodcastGenerating(true);
+    setPodcastProgress({
+      status: 'generating_script',
+      progress: 0,
+      message: 'Starting podcast generation...',
+    });
+
+    try {
+      const audioDataUrl = await generatePodcast(review, false, (progress) => {
+        setPodcastProgress(progress);
+      });
+
+      setPodcastUrl(audioDataUrl);
+      setIsPodcastGenerating(false);
+      setPodcastProgress(null);
+    } catch (error) {
+      console.error('Failed to generate podcast:', error);
+      setIsPodcastGenerating(false);
+      setPodcastProgress({
+        status: 'error',
+        progress: 0,
+        message: 'Failed to generate podcast',
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  };
 
   if (!review) {
     return (
@@ -264,6 +310,73 @@ export default function ReviewPage() {
               })()}
             </div>
           </article>
+
+          {/* Podcast Section */}
+          <section className="bg-white border-2 border-zinc-900 p-8 shadow-[8px_8px_0px_0px_rgba(24,24,27,1)] mb-12">
+            <div className="flex items-center gap-3 mb-6">
+              <Podcast className="w-6 h-6" />
+              <h3 className="text-2xl font-black uppercase tracking-tight">
+                Podcast Discussion
+              </h3>
+            </div>
+
+            {podcastUrl ? (
+              <div className="space-y-4">
+                <p className="text-zinc-600 italic">
+                  Listen to Chuck Morrison discuss this review with {review.review.criticName || 'the critic'}.
+                </p>
+                <AudioPlayer
+                  audioUrl={podcastUrl}
+                  audioFileName={`${review.slug}-podcast.wav`}
+                />
+              </div>
+            ) : isPodcastGenerating ? (
+              <div className="space-y-4">
+                <div className="bg-zinc-100 border-2 border-zinc-900 p-6">
+                  <div className="flex items-center gap-4 mb-4">
+                    <div className="animate-spin w-8 h-8 border-4 border-zinc-900 border-t-transparent rounded-full"></div>
+                    <div className="flex-1">
+                      <div className="font-black uppercase text-sm mb-1">
+                        {podcastProgress?.status === 'generating_script' && 'Generating Script'}
+                        {podcastProgress?.status === 'generating_audio' && 'Generating Audio'}
+                        {podcastProgress?.status === 'complete' && 'Complete'}
+                        {podcastProgress?.status === 'error' && 'Error'}
+                      </div>
+                      <div className="text-sm text-zinc-600">
+                        {podcastProgress?.message || 'Processing...'}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="w-full bg-zinc-300 h-2 border border-zinc-900">
+                    <div
+                      className="bg-zinc-900 h-full transition-all duration-300"
+                      style={{ width: `${podcastProgress?.progress || 0}%` }}
+                    />
+                  </div>
+                  {podcastProgress?.error && (
+                    <div className="mt-4 p-4 bg-red-100 border border-red-600 text-red-800 text-sm">
+                      {podcastProgress.error}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <p className="text-zinc-600">
+                  Want to hear a conversation about this review? Generate a podcast where Chuck Morrison
+                  sits down with {review.review.criticName || 'the critic'} to discuss
+                  &quot;{review.review.title}&quot; by {review.review.artist}.
+                </p>
+                <button
+                  onClick={handleGeneratePodcast}
+                  className="flex items-center gap-2 bg-zinc-900 text-white px-6 py-3 font-black uppercase text-sm hover:bg-zinc-800 transition-colors"
+                >
+                  <Podcast className="w-5 h-5" />
+                  Generate Podcast
+                </button>
+              </div>
+            )}
+          </section>
 
           <section id="comments" className="max-w-3xl mx-auto">
             <h3 className="text-2xl font-black uppercase tracking-tight mb-8 flex items-center gap-3">
