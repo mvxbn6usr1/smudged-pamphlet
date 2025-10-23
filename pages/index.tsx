@@ -305,7 +305,7 @@ export default function SmudgedPamphlet() {
           title: 'Editor-in-Chief',
           publication: 'The Smudged Pamphlet',
           color: 'red-500',
-          avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=chuckmorrison&top=shortHairShortFlat&facialHair=beardMedium',
+          avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=chuckmorrison&top=shortHairShortWaved&facialHair=beardMajestic&eyebrows=default&mouth=smile',
           bio: 'Editor-in-Chief, likes it loud and simple.'
         };
     }
