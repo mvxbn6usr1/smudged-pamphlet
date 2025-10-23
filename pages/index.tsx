@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Upload, MessageSquare, ThumbsDown, Terminal, ShieldAlert, ChevronDown, Music, Save, Trash2, Archive, X, ExternalLink } from 'lucide-react';
+import { Upload, MessageSquare, ThumbsDown, Terminal, ShieldAlert, ChevronDown, Music, Save, Trash2, Archive, X, ExternalLink, FileText } from 'lucide-react';
 import clsx from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { useRouter } from 'next/router';
@@ -159,6 +159,7 @@ export default function SmudgedPamphlet() {
 
   // Router to determine which critic handles the content
   type CriticType = 'music' | 'film' | 'literary';
+  type StaffType = CriticType | 'editor';
 
   const determineContentCritic = async (
     fileType: string | null,
@@ -265,8 +266,8 @@ export default function SmudgedPamphlet() {
   }
 
   // CRITIC SYSTEM PROMPTS
-  const getCriticInfo = (criticType: CriticType) => {
-    switch (criticType) {
+  const getStaffInfo = (staffType: StaffType) => {
+    switch (staffType) {
       case 'music':
         return {
           name: 'Julian Pinter',
@@ -297,8 +298,21 @@ export default function SmudgedPamphlet() {
           avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=margotashford&top=longHairStraight&eyebrows=raisedExcited',
           bio: 'Literary Critic, three PhDs and counting.'
         };
+      case 'editor':
+        return {
+          name: 'Chuck Morrison',
+          username: 'ChuckMorrison',
+          title: 'Editor-in-Chief',
+          publication: 'The Smudged Pamphlet',
+          color: 'red-500',
+          avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=chuckmorrison&top=shortHairShortFlat&facialHair=beardMedium',
+          bio: 'Editor-in-Chief, likes it loud and simple.'
+        };
     }
   };
+
+  // Keep backward compatibility
+  const getCriticInfo = (criticType: CriticType) => getStaffInfo(criticType);
 
   const getMargotPrompt = (metadata?: any, history?: any[], otherCritics?: any[]) => {
     const historyContext = history && history.length > 0
@@ -926,10 +940,10 @@ Output JSON array with likes for EACH item: [{"id": "the exact id from input", "
     });
 
     // Randomly decide what kind of interaction to generate
-    // 15% new comments, 30% replies from anyone, 15% original commenter defends/responds, 25% critic responses, 15% cross-critic comments
+    // 12% new comments, 28% replies from anyone, 12% original commenter defends/responds, 23% critic responses, 15% cross-critic comments, 10% editor comments
     const interactionType = Math.random();
 
-    if (interactionType < 0.15) {
+    if (interactionType < 0.12) {
       // New top-level comment
       const prompt = `You are simulating ONE new commenter discovering this review.
 Review: ${JSON.stringify(reviewData)}
@@ -938,8 +952,8 @@ Generate ONE new comment. Output: {"username":"name","persona_type":"type","text
       const result = await model.generateContent([prompt, audioPart]);
       const newComment = cleanAndParseJSON(result.response.text());
       return { type: 'new_comment', data: { id: `c${Date.now()}`, ...newComment, timestamp: 'Just now', likes: 0, replies: [] }};
-    } else if (interactionType < 0.45) {
-      // Reply to existing comment from random person (30% chance)
+    } else if (interactionType < 0.40) {
+      // Reply to existing comment from random person (28% chance)
       const allComments = currentComments.flatMap(c => [c, ...c.replies.map(r => ({ ...r, parentId: c.id }))]);
       if (allComments.length === 0) {
         // Fall back to new comment if no comments exist yet
@@ -972,8 +986,8 @@ Generate a reply from a NEW commenter. Output: {"username":"name","persona_type"
           replyingToId: target.id
         }
       };
-    } else if (interactionType < 0.60) {
-      // Original commenter responds to a reply on their comment (15% chance)
+    } else if (interactionType < 0.52) {
+      // Original commenter responds to a reply on their comment (12% chance)
       // Exclude human users from auto-responding
       const commentsWithReplies = currentComments.filter(c => c.replies.length > 0 && c.persona_type !== 'Human User');
       if (commentsWithReplies.length === 0) {
@@ -1032,7 +1046,7 @@ Output: {"reply_text":"reply"}`;
           replyingToId: replyToRespondTo.id
         }
       };
-    } else if (interactionType < 0.75) {
+    } else if (interactionType < 0.67) {
       // Cross-critic comment (15% chance) - another critic from the publication weighs in
       const currentCritic = reviewData.critic || 'music';
       const otherCriticTypes = (['music', 'film', 'literary'] as const).filter(c => c !== currentCritic);
@@ -1130,8 +1144,94 @@ Keep it brief and in character. Output: {"text":"your comment"}`;
           }
         };
       }
+    } else if (interactionType < 0.77) {
+      // Editor-in-Chief weighs in (10% chance)
+      const editorInfo = getStaffInfo('editor');
+      const shouldReply = Math.random() < 0.6 && currentComments.length > 0;
+
+      if (shouldReply) {
+        // Chuck replies to a comment
+        const allComments = currentComments.flatMap(c => [c, ...c.replies.map(r => ({ ...r, parentId: c.id }))]);
+        const target: any = allComments[Math.floor(Math.random() * allComments.length)];
+
+        const prompt = `You are Chuck Morrison, Editor-in-Chief of 'The Smudged Pamphlet'.
+
+You're reading your critic ${getCriticInfo(reviewData.critic || 'music').name}'s review and stumbled on this comment:
+${JSON.stringify(target)}
+
+Review context: ${JSON.stringify(reviewData)}
+
+Write a brief reply. You're the everyman editor - no fancy words, you defend the audience, call out pretension, and keep it REAL.
+
+You might:
+- Agree with the commenter if they're being reasonable
+- Call out your critic if they're being too pretentious
+- Defend your team but in a down-to-earth way
+- Add some common sense to the discussion
+
+Keep it SHORT and ACCESSIBLE. Talk like a regular person.
+
+Output: {"reply_text":"your reply"}`;
+
+        const result = await model.generateContent(prompt);
+        const reply = cleanAndParseJSON(result.response.text());
+
+        return {
+          type: 'reply',
+          parentId: target.parentId || target.id,
+          data: {
+            id: `re${Date.now()}`,
+            username: editorInfo.username,
+            persona_type: 'Editor-in-Chief',
+            timestamp: 'Just now',
+            text: reply.reply_text,
+            likes: 0,
+            is_julian: false,
+            is_critic: false,
+            is_editor: true,
+            replyingToUsername: target.username,
+            replyingToId: target.id
+          }
+        };
+      } else {
+        // Chuck leaves a top-level comment
+        const prompt = `You are Chuck Morrison, Editor-in-Chief of 'The Smudged Pamphlet'.
+
+You're reading your critic ${getCriticInfo(reviewData.critic || 'music').name}'s review:
+${JSON.stringify(reviewData)}
+
+Write a brief comment on this review. You're the everyman editor - you advocate for the audience.
+
+You might:
+- Call out pretentious language
+- Disagree with the score from an audience perspective
+- Defend what regular people like
+- Be funny and self-aware about your role
+- Show you care about the publication
+
+Keep it SHORT. No fancy words. Real talk.
+
+Output: {"text":"your comment"}`;
+
+        const result = await model.generateContent(prompt);
+        const comment = cleanAndParseJSON(result.response.text());
+
+        return {
+          type: 'new_comment',
+          data: {
+            id: `ce${Date.now()}`,
+            username: editorInfo.username,
+            persona_type: 'Editor-in-Chief',
+            timestamp: 'Just now',
+            text: comment.text,
+            likes: 0,
+            replies: [],
+            is_editor: true
+          }
+        };
+      }
     } else {
-      // Current critic responds (25% chance)
+      // Current critic responds (23% chance)
       const criticInfo = getCriticInfo(reviewData.critic || 'music');
       const unreplied = currentComments.filter(c => !c.replies.some(r => r.is_julian || r.is_critic));
       if (unreplied.length === 0) return null;
@@ -1832,6 +1932,13 @@ Output: {"reply_text":"reply"}`;
                 <Archive className="w-4 h-4" />
                 Archive ({savedReviews.length})
               </button>
+              <button
+                onClick={() => router.push('/editorial')}
+                className="flex items-center gap-2 bg-red-500 text-white px-4 py-2 font-black uppercase text-sm hover:bg-red-600 active:scale-95 transition-all border-2 border-zinc-900"
+              >
+                <FileText className="w-4 h-4" />
+                Editorial
+              </button>
             </div>
           </div>
         </div>
@@ -2110,15 +2217,21 @@ Output: {"reply_text":"reply"}`;
 
                         {comments.map((comment) => {
                             const isCriticComment = (comment as any).is_critic;
+                            const isEditorComment = (comment as any).is_editor;
                             const criticType = (comment as any).critic;
                             const criticInfo = isCriticComment && criticType ? getCriticInfo(criticType) : null;
+                            const editorInfo = isEditorComment ? getStaffInfo('editor') : null;
 
-                            const borderColor = criticInfo
+                            const borderColor = editorInfo
+                                ? 'border-red-500'
+                                : criticInfo
                                 ? (criticType === 'music' ? 'border-amber-400' :
                                    criticType === 'film' ? 'border-purple-400' : 'border-emerald-400')
                                 : comment.persona_type === 'Human User' ? 'border-blue-400' : 'border-zinc-300';
 
-                            const bgColor = criticInfo
+                            const bgColor = editorInfo
+                                ? 'bg-red-50'
+                                : criticInfo
                                 ? (criticType === 'music' ? 'bg-amber-50' :
                                    criticType === 'film' ? 'bg-purple-50' : 'bg-emerald-50')
                                 : comment.persona_type === 'Human User' ? 'bg-blue-50' : 'bg-white';
@@ -2128,10 +2241,10 @@ Output: {"reply_text":"reply"}`;
                                 <div className="flex gap-4">
                                     <div className={cn(
                                         "w-10 h-10 shrink-0 rounded-md overflow-hidden border-2",
-                                        isCriticComment ? borderColor : "border-zinc-900 bg-zinc-200"
+                                        (isCriticComment || isEditorComment) ? borderColor : "border-zinc-900 bg-zinc-200"
                                     )}>
                                          <img
-                                             src={criticInfo ? criticInfo.avatar : `https://api.dicebear.com/7.x/identicon/svg?seed=${comment.username}`}
+                                             src={editorInfo ? editorInfo.avatar : criticInfo ? criticInfo.avatar : `https://api.dicebear.com/7.x/identicon/svg?seed=${comment.username}`}
                                              alt={comment.username}
                                          />
                                     </div>
@@ -2146,7 +2259,9 @@ Output: {"reply_text":"reply"}`;
                                                     {comment.username}
                                                     <span className={cn(
                                                         "ml-2 text-xs text-white px-1 rounded-sm font-normal uppercase",
-                                                        comment.persona_type === 'Human User'
+                                                        isEditorComment
+                                                            ? "bg-red-500"
+                                                            : comment.persona_type === 'Human User'
                                                             ? "bg-blue-600"
                                                             : isCriticComment
                                                             ? (criticType === 'music' ? 'bg-amber-500' :
@@ -2202,15 +2317,21 @@ Output: {"reply_text":"reply"}`;
                                                 ))}
 
                                                 {comment.replies.map((reply) => {
-                                                    const criticInfo = getCriticInfo(review.critic || 'music');
                                                     const isCritic = reply.is_julian || reply.is_critic;
-                                                    const borderColor = review.critic === 'music' ? 'border-amber-400' :
+                                                    const isEditor = (reply as any).is_editor;
+                                                    const replyStaffType = isEditor ? 'editor' : (reply as any).critic || review.critic || 'music';
+                                                    const staffInfo = getStaffInfo(replyStaffType as StaffType);
+
+                                                    const borderColor = isEditor ? 'border-red-500' :
+                                                                       review.critic === 'music' ? 'border-amber-400' :
                                                                        review.critic === 'film' ? 'border-purple-400' :
                                                                        'border-emerald-400';
-                                                    const textColor = review.critic === 'music' ? 'text-amber-400' :
+                                                    const textColor = isEditor ? 'text-red-500' :
+                                                                     review.critic === 'music' ? 'text-amber-400' :
                                                                      review.critic === 'film' ? 'text-purple-400' :
                                                                      'text-emerald-400';
-                                                    const bgColor = review.critic === 'music' ? 'bg-amber-400' :
+                                                    const bgColor = isEditor ? 'bg-red-500' :
+                                                                   review.critic === 'music' ? 'bg-amber-400' :
                                                                    review.critic === 'film' ? 'bg-purple-400' :
                                                                    'bg-emerald-400';
 
@@ -2219,15 +2340,15 @@ Output: {"reply_text":"reply"}`;
                                                         <div className="text-zinc-400">
                                                             <ChevronDown className="w-6 h-6 ml-2" />
                                                         </div>
-                                                        {isCritic ? (
+                                                        {(isCritic || isEditor) ? (
                                                             <>
                                                                 <div className={`w-10 h-10 shrink-0 bg-zinc-900 rounded-full overflow-hidden border-2 ${borderColor} z-10`}>
-                                                                    <img src={criticInfo.avatar} alt={criticInfo.name} />
+                                                                    <img src={staffInfo.avatar} alt={staffInfo.name} />
                                                                 </div>
                                                                 <div className={`flex-1 bg-zinc-900 text-zinc-100 p-4 rounded-sm shadow-lg relative border-l-4 ${borderColor}`}>
                                                                     <div className="flex justify-between items-baseline mb-2">
                                                                         <div className={`font-black ${textColor} flex items-center gap-1`}>
-                                                                            {criticInfo.name.toUpperCase()}
+                                                                            {staffInfo.name.toUpperCase()}
                                                                             <ShieldAlert className="w-3 h-3" />
                                                                             <span className={`text-[10px] ${bgColor} text-zinc-900 px-1 rounded-sm ml-2`}>AUTHOR</span>
                                                                         </div>
