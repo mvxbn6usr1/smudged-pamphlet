@@ -4,7 +4,9 @@ import { MessageSquare, ThumbsDown, ShieldAlert, ChevronDown, ArrowLeft } from '
 import clsx from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import AudioPlayer from '@/components/AudioPlayer';
+import DocumentPreview from '@/components/DocumentPreview';
 import { getAudioData } from '@/utils/db';
+import { getCriticInfo as getCriticInfoUtil } from '@/utils/critics';
 
 function cn(...inputs: any[]) {
   return twMerge(clsx(inputs));
@@ -24,6 +26,9 @@ function extractYouTubeId(url: string): string | null {
   return null;
 }
 
+// Use shared utility for critic info
+const getCriticInfo = getCriticInfoUtil;
+
 interface ReviewData {
   title: string;
   artist: string;
@@ -31,6 +36,8 @@ interface ReviewData {
   summary: string;
   body: string[];
   notable_lyrics_quoted: string;
+  critic?: 'music' | 'film' | 'literary' | 'business';
+  criticName?: string;
 }
 
 interface Reply {
@@ -40,7 +47,9 @@ interface Reply {
   timestamp: string;
   text: string;
   likes: number;
-  is_julian: boolean;
+  is_julian?: boolean;
+  is_critic?: boolean;
+  critic?: 'music' | 'film' | 'literary' | 'business';
   replyingToUsername?: string;
   replyingToId?: string;
 }
@@ -77,6 +86,7 @@ export default function ReviewPage() {
   const { slug } = router.query;
   const [review, setReview] = useState<SavedReview | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | undefined>();
+  const [documentFile, setDocumentFile] = useState<File | null>(null);
 
   useEffect(() => {
     if (!slug) return;
@@ -90,19 +100,32 @@ export default function ReviewPage() {
           if (foundReview) {
             setReview(foundReview);
 
-            // Load audio from IndexedDB if available
+            // Load audio/document from IndexedDB if available
             if (foundReview.hasAudioInDB) {
               try {
                 const audioData = await getAudioData(foundReview.id);
                 if (audioData) {
-                  setAudioUrl(audioData);
+                  // For documents (literary/business reviews), recreate File object for download
+                  if ((foundReview.review.critic === 'literary' || foundReview.review.critic === 'business') && foundReview.audioFileName) {
+                    const response = await fetch(audioData);
+                    const blob = await response.blob();
+                    const file = new File([blob], foundReview.audioFileName, { type: blob.type });
+                    setDocumentFile(file);
+                    setAudioUrl(undefined);
+                  } else {
+                    // For audio/video, just set the URL
+                    setAudioUrl(audioData);
+                    setDocumentFile(null);
+                  }
                 }
               } catch (e) {
-                console.error('Failed to load audio from IndexedDB', e);
+                console.error('Failed to load from IndexedDB', e);
                 setAudioUrl(foundReview.audioDataUrl);
+                setDocumentFile(null);
               }
             } else {
               setAudioUrl(foundReview.audioDataUrl);
+              setDocumentFile(null);
             }
           } else {
             router.push('/');
@@ -140,7 +163,7 @@ export default function ReviewPage() {
                 The Smudged<br/>Pamphlet
               </h1>
               <p className="mt-2 text-lg italic font-medium text-zinc-500">
-                Music criticism for people who hate music criticism.
+                Criticism for people who hate criticism from real people.
               </p>
             </div>
             <button
@@ -188,6 +211,21 @@ export default function ReviewPage() {
                   ></iframe>
                 </div>
               </div>
+            ) : review.review.critic === 'literary' || review.review.critic === 'business' ? (
+              <DocumentPreview
+                fileName={review.audioFileName}
+                fileType={documentFile?.type}
+                onDownload={() => {
+                  if (documentFile) {
+                    const url = URL.createObjectURL(documentFile);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = documentFile.name;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                  }
+                }}
+              />
             ) : (
               <AudioPlayer
                 audioUrl={audioUrl}
@@ -210,13 +248,20 @@ export default function ReviewPage() {
               </blockquote>
             </div>
             <div className="mt-12 pt-6 border-t-2 border-zinc-100 flex items-center gap-4">
-              <div className="w-12 h-12 bg-zinc-200 rounded-full overflow-hidden border border-zinc-900">
-                <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=julianpinter&mood=sad&eyebrows=angryNatural`} alt="Julian Pinter" />
-              </div>
-              <div>
-                <div className="font-black uppercase tracking-wider">Julian Pinter</div>
-                <div className="text-sm text-zinc-500 italic">Chief Critic, has a headache.</div>
-              </div>
+              {(() => {
+                const criticInfo = getCriticInfo(review.review.critic || 'music');
+                return (
+                  <>
+                    <div className="w-12 h-12 bg-zinc-200 rounded-full overflow-hidden border border-zinc-900">
+                      <img src={criticInfo.avatar} alt={criticInfo.name} />
+                    </div>
+                    <div>
+                      <div className="font-black uppercase tracking-wider">{criticInfo.name}</div>
+                      <div className="text-sm text-zinc-500 italic">{criticInfo.bio}</div>
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           </article>
 
@@ -254,33 +299,50 @@ export default function ReviewPage() {
                       {/* Render all replies */}
                       {comment.replies.length > 0 && (
                         <div className="mt-4 space-y-4">
-                          {comment.replies.map((reply) => (
+                          {comment.replies.map((reply) => {
+                            const isCritic = reply.is_julian || reply.is_critic;
+                            const criticType = reply.critic || review.review.critic || 'music';
+                            const criticInfo = isCritic ? getCriticInfo(criticType) : null;
+                            const borderColor = criticType === 'music' ? 'border-amber-400'
+                              : criticType === 'film' ? 'border-purple-400'
+                              : criticType === 'business' ? 'border-blue-500'
+                              : 'border-emerald-400';
+                            const textColor = criticType === 'music' ? 'text-amber-400'
+                              : criticType === 'film' ? 'text-purple-400'
+                              : criticType === 'business' ? 'text-blue-500'
+                              : 'text-emerald-400';
+                            const bgColor = criticType === 'music' ? 'bg-amber-400'
+                              : criticType === 'film' ? 'bg-purple-400'
+                              : criticType === 'business' ? 'bg-blue-500'
+                              : 'bg-emerald-400';
+
+                            return (
                             <div key={reply.id} className="flex gap-4 ml-2 md:ml-8 animate-in fade-in slide-in-from-left-4">
                               <div className="text-zinc-400">
                                 <ChevronDown className="w-6 h-6 ml-2" />
                               </div>
-                              {reply.is_julian ? (
+                              {isCritic && criticInfo ? (
                                 <>
-                                  <div className="w-10 h-10 shrink-0 bg-zinc-900 rounded-full overflow-hidden border-2 border-amber-400 z-10">
-                                    <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=julianpinter&mood=sad&eyebrows=angryNatural`} alt="Julian Pinter" />
+                                  <div className={`w-10 h-10 shrink-0 bg-zinc-900 rounded-full overflow-hidden border-2 ${borderColor} z-10`}>
+                                    <img src={criticInfo.avatar} alt={criticInfo.name} />
                                   </div>
-                                  <div className="flex-1 bg-zinc-900 text-zinc-100 p-4 rounded-sm shadow-lg relative border-l-4 border-amber-400">
+                                  <div className={`flex-1 bg-zinc-900 text-zinc-100 p-4 rounded-sm shadow-lg relative border-l-4 ${borderColor}`}>
                                     <div className="flex justify-between items-baseline mb-2">
-                                      <div className="font-black text-amber-400 flex items-center gap-1">
-                                        JULIAN PINTER
+                                      <div className={`font-black ${textColor} flex items-center gap-1`}>
+                                        {criticInfo.name.toUpperCase()}
                                         <ShieldAlert className="w-3 h-3" />
-                                        <span className="text-[10px] bg-amber-400 text-zinc-900 px-1 rounded-sm ml-2">AUTHOR</span>
+                                        <span className={`text-[10px] ${bgColor} text-zinc-900 px-1 rounded-sm ml-2`}>AUTHOR</span>
                                       </div>
                                       <div className="text-xs text-zinc-500">{reply.timestamp}</div>
                                     </div>
                                     <p className="whitespace-pre-wrap font-medium">
                                       {reply.replyingToUsername && (
-                                        <span className="text-amber-400 font-black">@{reply.replyingToUsername} </span>
+                                        <span className={`${textColor} font-black`}>@{reply.replyingToUsername} </span>
                                       )}
                                       {reply.text}
                                     </p>
-                                    <div className="mt-3 flex items-center gap-4 text-xs text-amber-400/70 font-medium">
-                                      <button className="flex items-center gap-1 hover:text-amber-400">
+                                    <div className={`mt-3 flex items-center gap-4 text-xs ${textColor}/70 font-medium`}>
+                                      <button className={`flex items-center gap-1 hover:${textColor}`}>
                                         <ThumbsDown className="w-3 h-3 rotate-180" /> {reply.likes}
                                       </button>
                                     </div>
@@ -316,7 +378,8 @@ export default function ReviewPage() {
                                 </>
                               )}
                             </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       )}
                     </div>
