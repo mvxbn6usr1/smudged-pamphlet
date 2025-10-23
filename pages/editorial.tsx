@@ -595,6 +595,25 @@ Generate a new comment. Output: {"username":"name","persona_type":"type","text":
     };
   }, [commentGenerationActive, editorial, comments, generateOrganicEditorialComment]);
 
+  // Auto-save comments to the current editorial in localStorage
+  useEffect(() => {
+    if (!editorial || comments.length === 0) return;
+
+    // Update the editorial in savedEditorials with current comments
+    setSavedEditorials(prev => {
+      const currentEditorialIndex = prev.findIndex(e => e.id === editorial.id);
+      if (currentEditorialIndex === -1) return prev;
+
+      const updatedEditorials = [...prev];
+      updatedEditorials[currentEditorialIndex] = {
+        ...updatedEditorials[currentEditorialIndex],
+        comments: comments
+      };
+      localStorage.setItem('smudged_editorials', JSON.stringify(updatedEditorials));
+      return updatedEditorials;
+    });
+  }, [comments, editorial]);
+
   const handleCommentSubmit = () => {
     if (!commentText.trim() || !userName.trim()) return;
 

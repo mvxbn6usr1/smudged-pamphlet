@@ -1741,9 +1741,9 @@ Output: {"reply_text":"reply"}`;
     };
   }, [audioUrl]);
 
-  // Auto-save comments as they update during organic generation
+  // Auto-save comments as they update (both during organic generation AND user comments)
   useEffect(() => {
-    if (!commentGenerationActive || !currentReviewId) return;
+    if (!currentReviewId || comments.length === 0) return;
 
     // Find and update the current review's comments
     setSavedReviews(prev => {
@@ -1758,7 +1758,7 @@ Output: {"reply_text":"reply"}`;
       localStorage.setItem('smudged_reviews', JSON.stringify(updatedReviews));
       return updatedReviews;
     });
-  }, [comments, commentGenerationActive, currentReviewId]);
+  }, [comments, currentReviewId]);
 
   // Refs to persist across renders without triggering re-renders
   const commentCountRef = useRef(0);
