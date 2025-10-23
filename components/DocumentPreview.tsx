@@ -50,7 +50,8 @@ export default function DocumentPreview({ fileName, fileType, onDownload }: Docu
           {onDownload && (
             <button
               onClick={onDownload}
-              className="flex items-center gap-2 bg-zinc-900 text-white px-4 py-2 font-black uppercase text-sm hover:bg-zinc-800 transition-colors border-2 border-zinc-900"
+              aria-label={`Download ${fileName || 'document'}`}
+              className="flex items-center gap-2 bg-zinc-900 text-white px-4 py-2 font-black uppercase text-sm hover:bg-zinc-800 transition-colors border-2 border-zinc-900 focus:outline-none focus:ring-2 focus:ring-zinc-500 focus:ring-offset-2"
             >
               <Download className="w-4 h-4" />
               Download Document

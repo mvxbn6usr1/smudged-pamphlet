@@ -7,6 +7,7 @@ import AudioPlayer from '@/components/AudioPlayer';
 import DocumentPreview from '@/components/DocumentPreview';
 import { saveAudioData, getAudioData, deleteAudioData } from '@/utils/db';
 import { fetchYouTubeMetadataServerSide, extractYouTubeId as extractYouTubeIdUtil, ServerSideGeminiAI } from '@/utils/api';
+import { getCriticInfo as getCriticInfoUtil, getStaffInfo as getStaffInfoUtil } from '@/utils/critics';
 
 function cn(...inputs: any[]) {
   return twMerge(clsx(inputs));
@@ -268,64 +269,9 @@ export default function SmudgedPamphlet() {
     }
   }
 
-  // CRITIC SYSTEM PROMPTS
-  const getStaffInfo = (staffType: StaffType) => {
-    switch (staffType) {
-      case 'music':
-        return {
-          name: 'Julian Pinter',
-          username: 'JulianPinter',
-          title: 'Music Critic',
-          publication: 'The Smudged Pamphlet',
-          color: 'amber-400',
-          avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=julianpinter&mood=sad&eyebrows=angryNatural',
-          bio: 'Chief Critic, has a headache.'
-        };
-      case 'film':
-        return {
-          name: 'Rex Beaumont',
-          username: 'RexBeaumont',
-          title: 'Film Critic',
-          publication: 'The Smudged Pamphlet',
-          color: 'purple-400',
-          avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=rexbeaumont&glasses=prescription02&eyes=squint',
-          bio: 'Film Critic, watches everything at 1.5x speed.'
-        };
-      case 'literary':
-        return {
-          name: 'Margot Ashford',
-          username: 'MargotAshford',
-          title: 'Literary Critic',
-          publication: 'The Smudged Pamphlet',
-          color: 'emerald-400',
-          avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=margotashford&top=straightAndStrand&eyebrows=raisedExcited',
-          bio: 'Literary Critic, three PhDs and counting.'
-        };
-      case 'business':
-        return {
-          name: 'Patricia Chen',
-          username: 'PatriciaChen',
-          title: 'Business Editor',
-          publication: 'The Smudged Pamphlet',
-          color: 'blue-500',
-          avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=patriciachen&top=straight01&eyebrows=raisedExcitedNatural&eyes=eyeRoll&mouth=serious&skinColor=edb98a',
-          bio: 'Business Editor, zero tolerance for corporate jargon.'
-        };
-      case 'editor':
-        return {
-          name: 'Chuck Morrison',
-          username: 'ChuckMorrison',
-          title: 'Editor-in-Chief',
-          publication: 'The Smudged Pamphlet',
-          color: 'red-500',
-          avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=chuckmorrison&top=shortFlat&facialHair=beardMedium&eyebrows=default&mouth=smile&eyes=default&skinColor=ffdbb4',
-          bio: 'Editor-in-Chief, likes it loud and simple.'
-        };
-    }
-  };
-
-  // Keep backward compatibility
-  const getCriticInfo = (criticType: CriticType) => getStaffInfo(criticType);
+  // CRITIC SYSTEM PROMPTS (using shared utility)
+  const getStaffInfo = getStaffInfoUtil;
+  const getCriticInfo = getCriticInfoUtil;
 
   const getMargotPrompt = (metadata?: any, history?: any[], otherCritics?: any[]) => {
     const historyContext = history && history.length > 0
@@ -973,7 +919,7 @@ Keep it professional but pointed. Call out BS when you see it. Give credit when 
       if (reply) {
         const newReply: Reply = {
           id: `r-critic-${c.id}`,
-          username: criticInfo.username,
+          username: criticInfo.username || criticInfo.name,
           persona_type: 'Author',
           timestamp: 'Just now',
           text: reply.reply_text,

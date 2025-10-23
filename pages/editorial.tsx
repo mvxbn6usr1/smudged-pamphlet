@@ -4,8 +4,17 @@ import { ArrowLeft, FileText, Check, MessageSquare, Archive, X, ThumbsDown, Chev
 import clsx from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { getAudioData } from '@/utils/db';
+import { getStaffInfo as getStaffInfoUtil } from '@/utils/critics';
 
 const cn = (...inputs: any[]) => twMerge(clsx(inputs));
+
+// Constants for comment generation timing
+const MAX_ORGANIC_COMMENTS = 20;
+const MIN_COMMENT_DELAY_MS = 8000;
+const MAX_COMMENT_DELAY_MS = 20000;
+const INITIAL_COMMENT_MIN_DELAY_MS = 3000;
+const INITIAL_COMMENT_MAX_DELAY_MS = 8000;
+const AUTO_SAVE_DEBOUNCE_MS = 1000;
 
 interface SavedReview {
   id: string;
@@ -82,60 +91,9 @@ type StaffType = CriticType | 'editor';
 export default function Editorial() {
   const router = useRouter();
 
-  const getStaffInfo = (staffType: StaffType) => {
-    switch (staffType) {
-      case 'music':
-        return {
-          name: 'Julian Pinter',
-          username: 'JulianPinter',
-          title: 'Music Critic',
-          publication: 'The Smudged Pamphlet',
-          color: 'amber-400',
-          avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=julianpinter&mood=sad&eyebrows=angryNatural',
-          bio: 'Chief Critic, has a headache.'
-        };
-      case 'film':
-        return {
-          name: 'Rex Beaumont',
-          username: 'RexBeaumont',
-          title: 'Film Critic',
-          publication: 'The Smudged Pamphlet',
-          color: 'purple-400',
-          avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=rexbeaumont&glasses=prescription02&eyes=squint',
-          bio: 'Film Critic, watches everything at 1.5x speed.'
-        };
-      case 'literary':
-        return {
-          name: 'Margot Ashford',
-          username: 'MargotAshford',
-          title: 'Literary Critic',
-          publication: 'The Smudged Pamphlet',
-          color: 'emerald-400',
-          avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=margotashford&top=straightAndStrand&eyebrows=raisedExcited',
-          bio: 'Literary Critic, three PhDs and counting.'
-        };
-      case 'business':
-        return {
-          name: 'Patricia Chen',
-          username: 'PatriciaChen',
-          title: 'Business Editor',
-          publication: 'The Smudged Pamphlet',
-          color: 'blue-500',
-          avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=patriciachen&top=straight01&eyebrows=raisedExcitedNatural&eyes=eyeRoll&mouth=serious&skinColor=edb98a',
-          bio: 'Business Editor, zero tolerance for corporate jargon.'
-        };
-      case 'editor':
-        return {
-          name: 'Chuck Morrison',
-          username: 'ChuckMorrison',
-          title: 'Editor-in-Chief',
-          publication: 'The Smudged Pamphlet',
-          color: 'red-500',
-          avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=chuckmorrison&top=shortFlat&facialHair=beardMedium&eyebrows=default&mouth=smile&eyes=default&skinColor=ffdbb4',
-          bio: 'Editor-in-Chief, likes it loud and simple.'
-        };
-    }
-  };
+  // Use shared utility for critic/staff info
+  const getStaffInfo = getStaffInfoUtil;
+
   const [savedReviews, setSavedReviews] = useState<SavedReview[]>([]);
   const [selectedReviews, setSelectedReviews] = useState<Set<string>>(new Set());
   const [editorial, setEditorial] = useState<any>(null);
@@ -151,6 +109,16 @@ export default function Editorial() {
   const [isPostingComment, setIsPostingComment] = useState(false);
   const commentCountRef = useRef(0);
   const organicTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const isMountedRef = useRef(true);
+  const saveDebounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Set up mounted ref cleanup
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     const storedReviews = localStorage.getItem('smudged_reviews');
@@ -624,10 +592,9 @@ Generate a new comment. Output: {"username":"name","persona_type":"type","text":
     }
 
     commentCountRef.current = 0;
-    const MAX_COMMENTS = 20;
 
     const generateNext = async () => {
-      if (commentCountRef.current >= MAX_COMMENTS || !commentGenerationActive) {
+      if (commentCountRef.current >= MAX_ORGANIC_COMMENTS || !commentGenerationActive) {
         setCommentGenerationActive(false);
         setTypingIndicators([]);
         return;
@@ -637,9 +604,13 @@ Generate a new comment. Output: {"username":"name","persona_type":"type","text":
       const tempUsername = `User${Math.floor(Math.random() * 1000)}`;
       const tempCommentId = Math.random() > 0.5 ? null : comments[Math.floor(Math.random() * comments.length)]?.id || null;
 
+      if (!isMountedRef.current) return;
+
       setTypingIndicators(prev => [...prev, { commentId: tempCommentId, username: tempUsername }]);
 
       const interaction = await generateOrganicEditorialComment();
+
+      if (!isMountedRef.current) return;
 
       // Remove typing indicator
       setTypingIndicators(prev => prev.filter(t => t.username !== tempUsername));
@@ -659,14 +630,14 @@ Generate a new comment. Output: {"username":"name","persona_type":"type","text":
       }
 
       // Schedule next comment
-      if (commentCountRef.current < MAX_COMMENTS && commentGenerationActive) {
-        const delay = 8000 + Math.random() * 12000; // 8-20 seconds
+      if (isMountedRef.current && commentCountRef.current < MAX_ORGANIC_COMMENTS && commentGenerationActive) {
+        const delay = MIN_COMMENT_DELAY_MS + Math.random() * (MAX_COMMENT_DELAY_MS - MIN_COMMENT_DELAY_MS);
         organicTimerRef.current = setTimeout(generateNext, delay);
       }
     };
 
     // Start generation
-    const initialDelay = 3000 + Math.random() * 5000; // 3-8 seconds
+    const initialDelay = INITIAL_COMMENT_MIN_DELAY_MS + Math.random() * (INITIAL_COMMENT_MAX_DELAY_MS - INITIAL_COMMENT_MIN_DELAY_MS);
     organicTimerRef.current = setTimeout(generateNext, initialDelay);
 
     return () => {
@@ -677,23 +648,44 @@ Generate a new comment. Output: {"username":"name","persona_type":"type","text":
     };
   }, [commentGenerationActive, editorial, comments, generateOrganicEditorialComment]);
 
-  // Auto-save comments to the current editorial in localStorage
+  // Auto-save comments to the current editorial in localStorage with debouncing
   useEffect(() => {
     if (!editorial || comments.length === 0) return;
 
-    // Update the editorial in savedEditorials with current comments
-    setSavedEditorials(prev => {
-      const currentEditorialIndex = prev.findIndex(e => e.id === editorial.id);
-      if (currentEditorialIndex === -1) return prev;
+    // Clear previous debounce timer
+    if (saveDebounceTimerRef.current) {
+      clearTimeout(saveDebounceTimerRef.current);
+    }
 
-      const updatedEditorials = [...prev];
-      updatedEditorials[currentEditorialIndex] = {
-        ...updatedEditorials[currentEditorialIndex],
-        comments: comments
-      };
-      localStorage.setItem('smudged_editorials', JSON.stringify(updatedEditorials));
-      return updatedEditorials;
-    });
+    // Debounce the save operation
+    saveDebounceTimerRef.current = setTimeout(() => {
+      // Update the editorial in savedEditorials with current comments
+      setSavedEditorials(prev => {
+        const currentEditorialIndex = prev.findIndex(e => e.id === editorial.id);
+        if (currentEditorialIndex === -1) return prev;
+
+        const updatedEditorials = [...prev];
+        updatedEditorials[currentEditorialIndex] = {
+          ...updatedEditorials[currentEditorialIndex],
+          comments: comments
+        };
+
+        try {
+          localStorage.setItem('smudged_editorials', JSON.stringify(updatedEditorials));
+        } catch (e) {
+          console.error('Failed to save to localStorage (quota exceeded?)', e);
+        }
+
+        return updatedEditorials;
+      });
+    }, AUTO_SAVE_DEBOUNCE_MS);
+
+    // Cleanup debounce timer
+    return () => {
+      if (saveDebounceTimerRef.current) {
+        clearTimeout(saveDebounceTimerRef.current);
+      }
+    };
   }, [comments, editorial]);
 
   const handleCommentSubmit = () => {

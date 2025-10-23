@@ -6,6 +6,7 @@ import { twMerge } from 'tailwind-merge';
 import AudioPlayer from '@/components/AudioPlayer';
 import DocumentPreview from '@/components/DocumentPreview';
 import { getAudioData } from '@/utils/db';
+import { getCriticInfo as getCriticInfoUtil } from '@/utils/critics';
 
 function cn(...inputs: any[]) {
   return twMerge(clsx(inputs));
@@ -25,34 +26,8 @@ function extractYouTubeId(url: string): string | null {
   return null;
 }
 
-function getCriticInfo(criticType: 'music' | 'film' | 'literary' | 'business') {
-  switch (criticType) {
-    case 'music':
-      return {
-        name: 'Julian Pinter',
-        avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=julianpinter&mood=sad&eyebrows=angryNatural',
-        bio: 'Chief Critic, has a headache.'
-      };
-    case 'film':
-      return {
-        name: 'Rex Beaumont',
-        avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=rexbeaumont&glasses=prescription02&eyes=squint',
-        bio: 'Film Critic, watches everything at 1.5x speed.'
-      };
-    case 'literary':
-      return {
-        name: 'Margot Ashford',
-        avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=margotashford&top=straightAndStrand&eyebrows=raisedExcited',
-        bio: 'Literary Critic, three PhDs and counting.'
-      };
-    case 'business':
-      return {
-        name: 'Patricia Chen',
-        avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=patriciachen&top=straight01&eyebrows=raisedExcitedNatural&eyes=eyeRoll&mouth=serious&skinColor=edb98a',
-        bio: 'Business Editor, zero tolerance for corporate jargon.'
-      };
-  }
-}
+// Use shared utility for critic info
+const getCriticInfo = getCriticInfoUtil;
 
 interface ReviewData {
   title: string;
