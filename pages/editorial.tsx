@@ -247,7 +247,7 @@ Output ONLY valid JSON:
     username: 'ChuckMorrison',
     title: 'Editor-in-Chief',
     color: 'red-500',
-    avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=chuckmorrison&top=shortHairShortWaved&facialHair=beardMajestic&eyebrows=default&mouth=smile',
+    avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=chuckmorrison&top=shortFlat&facialHair=beardMedium&eyebrows=default&mouth=smile&eyes=default&skinColor=ffdbb4',
     bio: 'Editor-in-Chief, likes it loud and simple.'
   };
 
