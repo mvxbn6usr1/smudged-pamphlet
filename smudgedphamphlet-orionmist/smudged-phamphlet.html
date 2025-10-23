@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Smudged Pamphlet - AI Reviewer</title>
+    <style>
+        :root {
+            --bg-color: #f4f1ea;
+            --text-color: #2a2a2a;
+            --accent-color: #d64933;
+            --secondary-color: #5e6f7e;
+            --zine-font: 'Courier New', Courier, monospace; /* Lo-fi aesthetic */
+        }
+
+        body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 20px;
+            line-height: 1.5;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: #fff;
+            padding: 30px;
+            border: 1px solid #000;
+            box-shadow: 10px 10px 0px #000;
+        }
+
+        h1, h2, h3 {
+            font-family: var(--zine-font);
+            text-transform: uppercase;
+            letter-spacing: -1px;
+        }
+
+        h1 {
+            border-bottom: 4px solid var(--text-color);
+            padding-bottom: 10px;
+            margin-bottom: 30px;
+            font-style: italic;
+        }
+
+        .setup-panel {
+            background: #eee;
+            padding: 15px;
+            border: 2px dashed #999;
+            margin-bottom: 30px;
+            font-size: 0.9em;
+        }
+
+        .setup-panel input, .setup-panel textarea {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0 15px 0;
+            font-family: monospace;
+            border: 1px solid #333;
+        }
+
+        button {
+            background: var(--text-color);
+            color: var(--bg-color);
+            border: none;
+            padding: 12px 25px;
+            font-family: var(--zine-font);
+            font-weight: bold;
+            cursor: pointer;
+            text-transform: uppercase;
+            transition: all 0.2s;
+        }
+
+        button:hover {
+            background: var(--accent-color);
+            box-shadow: 3px 3px 0px #000;
+            transform: translate(-2px, -2px);
+        }
+
+        button:disabled {
+            background: #999;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .review-section, .comments-section {
+            display: none; /* Hidden until active */
+            margin-top: 40px;
+            border-top: 2px solid #000;
+            padding-top: 20px;
+        }
+
+        .julian-review {
+            font-family: Georgia, serif;
+            font-size: 1.1rem;
+            white-space: pre-wrap;
+        }
+
+        .author-byline {
+            font-style: italic;
+            color: var(--accent-color);
+            font-weight: bold;
+            margin-bottom: 20px;
+        }
+
+        .comment {
+            margin-bottom: 25px;
+            padding: 15px;
+            background: #f9f9f9;
+            border-left: 3px solid #ccc;
+        }
+
+        .comment-user {
+            font-weight: bold;
+            color: var(--secondary-color);
+        }
+
+        .julian-reply {
+            margin-top: 10px;
+            margin-left: 20px;
+            padding: 10px;
+            background: #ffebeb;
+            border-left: 3px solid var(--accent-color);
+            font-family: Georgia, serif;
+            font-size: 0.95rem;
+            position: relative;
+        }
+
+        .julian-reply::before {
+            content: "Julian Pinter replied:";
+            display: block;
+            font-size: 0.8em;
+            color: var(--accent-color);
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .status-log {
+            font-family: monospace;
+            color: var(--secondary-color);
+            margin-top: 10px;
+            min-height: 20px;
+        }
+
+        .loading-dots::after {
+            content: ' .';
+            animation: dots 1.5s steps(5, end) infinite;
+        }
+        @keyframes dots {
+            0%, 20% { color: rgba(0,0,0,0); text-shadow: .25em 0 0 rgba(0,0,0,0), .5em 0 0 rgba(0,0,0,0);}
+            40% { color: #333; text-shadow: .25em 0 0 rgba(0,0,0,0), .5em 0 0 rgba(0,0,0,0);}
+            60% { text-shadow: .25em 0 0 #333, .5em 0 0 rgba(0,0,0,0);}
+            80%, 100% { text-shadow: .25em 0 0 #333, .5em 0 0 #333;}
+        }
+
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>The Smudged Pamphlet</h1>
+    <p><em>Autonomous Music Criticism Engine v2.5</em></p>
+
+    <!-- CONFIGURATION & INPUT -->
+    <div class="setup-panel">
+        <h3>1. Configure Agent Access</h3>
+        <p>To power Julian and the horde, provide a Google Cloud Vertex AI Service Account JSON (strictly as requested) OR a standard Google AI Studio API Key. 
+        <br><small><em>Note: Pure browser-side use of Service Account JSON is technically limited by CORS and crypto requirements. If the JSON fails, standard API Keys are recommended for this standalone demo.</em></small></p>
+        
+        <label for="authInput">Service Account JSON / API Key:</label>
+        <textarea id="authInput" rows="5" placeholder='Paste {"type": "service_account"...} OR your API Key starting with AIza...'></textarea>
+
+        <h3>2. Submit Music for Ritual Slaughter</h3>
+        <label for="audioFile">Select MP3/WAV (Max ~10MB recommended for browser):</label>
+        <input type="file" id="audioFile" accept="audio/mp3, audio/wav, audio/mpeg">
+        
+        <button id="startBtn" onclick="startWorkflow()">Submit to Julian</button>
+        <div id="mainStatus" class="status-log"></div>
+    </div>
+
+    <!-- AGENT 1: JULIAN'S REVIEW -->
+    <div id="reviewSection" class="review-section">
+        <h2>The Review</h2>
+        <div class="author-byline">By Julian Pinter</div>
+        <div id="reviewText" class="julian-review"></div>
+    </div>
+
+    <!-- AGENT 2 & 3: COMMENTS & ARGUMENTS -->
+    <div id="commentsSection" class="comments-section">
+        <h2>The Discourse (Comments)</h2>
+        <div id="commentsStatus" class="status-log"></div>
+        <div id="commentsList">
+            <!-- Comments and Julian's replies will inject here -->
+        </div>
+    </div>
+
+</div>
+
+<script>
+    // CONSTANTS & CONFIG
+    // Using 1.5-pro as 2.5 is not publicly verifiable at time of writing, 
+    // but the variable is exposed for easy update if 2.5 becomes valid endpoint.
+    const MODEL_NAME = "gemini-2.5-pro"; 
+    const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models/";
+
+    let API_KEY = "";
+
+    // --- PERSONA DEFINITIONS ---
+    const JULIAN_SYSTEM_PROMPT = `
+    You are Julian Pinter, the chief critic of 'The Smudged Pamphlet', a notoriously pretentious indie music review site. 
+    You are cynical, unimpressed, use overly complex metaphors, and have an egg stain on your t-shirt that you refuse to acknowledge.
+    Your reviews are scathing, bordering on personal attacks on the artist's perceived lack of authenticity.
+    You hated everything popular before it was popular, and now you hate it even more.
+    Write a ~300 word review of the provided audio track. Be brutally honest but mostly just brutal.
+    `;
+
+    const COMMENTER_SYSTEM_PROMPT = `
+    You are an AI engine simulating the comments section of a pretentious music blog.
+    Read the provided music review and generate exactly 10 diverse user comments reacting to it.
+    The users should vary: angry fanboys of the artist, confused boomers, people who hate Julian (the writer), bots trying to sell crypto, and other elitist snobs agreeing with Julian.
+    RETURN ONLY RAW JSON. A pure array of objects with 'user' and 'text' properties.
+    Example: [{"user": "MusicLover99", "text": "This review is trash!"}, {"user": "VinylSnob", "text": "Actually, Julian is spot on."}]
+    `;
+
+    const JULIAN_REPLY_PROMPT = `
+    You are Julian Pinter (pretentious music critic). You just wrote a review and now you are in the comments section.
+    You are petty, defensive, and get into vicious arguments with random commenters.
+    Read the specific comment provided and write a short, scathing reply (1-2 sentences max) dismissing their opinion entirely.
+    `;
+
+    // --- CORE API FUNCTIONS ---
+
+    async function determineAuth(input) {
+         // Naive check if it's JSON (Service Account) or just a Key string
+         input = input.trim();
+         if (input.startsWith('{')) {
+             try {
+                 const sa = JSON.parse(input);
+                 if (sa.type === 'service_account') {
+                     alert("NOTE: You provided a Service Account JSON. This standalone HTML cannot securely sign JWTs for standard Google Cloud Auth without external heavy crypto libraries. Please use a standard Google AI Studio API KEY for this demo to function.");
+                     throw new Error("Service Account auth not implemented for pure-browser demo due to technical constraints. Use API Key.");
+                 }
+             } catch (e) {
+                  if(e.message.includes("Service Account")) throw e;
+                  // If standard JSON parse fails, maybe it's just a weird key, continue to try as key.
+             }
+         }
+         // Assume it's an API Key if not valid SA JSON
+         return input;
+    }
+
+    async function callGemini(systemPrompt, userContentParts, statusElementId) {
+        const statusEl = document.getElementById(statusElementId);
+        if(statusEl) statusEl.textContent = "Contacting Gemini Agent...";
+
+        const url = `${API_BASE}${MODEL_NAME}:generateContent?key=${API_KEY}`;
+        
+        const payload = {
+            system_instruction: {
+                parts: [{ text: systemPrompt }]
+            },
+            contents: [{
+                role: "user",
+                parts: userContentParts
+            }],
+            generationConfig: {
+                temperature: 0.8, // High temp for creative/chaotic responses
+            }
+        };
+
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                const errText = await response.text();
+                throw new Error(`Gemini API Error (${response.status}): ${errText}`);
+            }
+
+            const data = await response.json();
+            if(statusEl) statusEl.textContent = "";
+            return data.candidates[0].content.parts[0].text;
+
+        } catch (error) {
+            if(statusEl) statusEl.textContent = "Error: " + error.message;
+            console.error("Gemini Call Failed:", error);
+            throw error;
+        }
+    }
+
+    // --- WORKFLOW ORCHESTRATION ---
+
+    async function startWorkflow() {
+        const authInputStr = document.getElementById('authInput').value;
+        const fileInput = document.getElementById('audioFile');
+        const status = document.getElementById('mainStatus');
+        const startBtn = document.getElementById('startBtn');
+
+        if (!authInputStr) { alert("Please provide Auth (API Key preferred)."); return; }
+        if (fileInput.files.length === 0) { alert("Please select an audio file."); return; }
+
+        try {
+            API_KEY = await determineAuth(authInputStr);
+        } catch (e) {
+            status.textContent = e.message;
+            return;
+        }
+
+        // Reset UI
+        startBtn.disabled = true;
+        document.getElementById('reviewSection').style.display = 'none';
+        document.getElementById('commentsSection').style.display = 'none';
+        document.getElementById('commentsList').innerHTML = '';
+        status.innerHTML = 'Uploading and transcoding audio for Julian<span class="loading-dots"></span>';
+
+        // 1. Read Audio File
+        const file = fileInput.files[0];
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        
+        reader.onloadend = async function() {
+            const base64Audio = reader.result.split(',')[1]; // remove data:audio/mp3;base64, prefix
+            const mimeType = file.type;
+
+            try {
+                // --- STEP 1: JULIAN'S REVIEW ---
+                status.innerHTML = 'Julian is hate-listening to your track<span class="loading-dots"></span>';
+                
+                const audioPart = { inlineData: { mimeType: mimeType, data: base64Audio } };
+                const textPrompt = { text: "Here is the track. Destroy it." };
+
+                const reviewText = await callGemini(JULIAN_SYSTEM_PROMPT, [audioPart, textPrompt], 'mainStatus');
+                
+                // Render Review
+                document.getElementById('reviewText').innerText = reviewText;
+                document.getElementById('reviewSection').style.display = 'block';
+                status.textContent = 'Review published.';
+
+                // --- STEP 2: GENERATE COMMENTS ---
+                document.getElementById('commentsSection').style.display = 'block';
+                const comStatus = document.getElementById('commentsStatus');
+                comStatus.innerHTML = 'Comment section toxic sludge accumulating<span class="loading-dots"></span>';
+
+                // We pass Julian's review to the comment generator agent
+                const commentPromptParts = [{ text: `Here is the review to react to:\n\n${reviewText}` }];
+                let commentsJsonStr = await callGemini(COMMENTER_SYSTEM_PROMPT, commentPromptParts, null); // null status to not overwrite
+
+                // Clean up potential markdown code fences from Gemini response if present
+                commentsJsonStr = commentsJsonStr.replace(/```json/g, '').replace(/```/g, '').trim();
+                
+                let comments = [];
+                try {
+                    comments = JSON.parse(commentsJsonStr);
+                } catch (e) {
+                    console.error("Failed to parse comments JSON", commentsJsonStr);
+                    comStatus.textContent = "Error parsing comment agents.";
+                    return;
+                }
+
+                comStatus.textContent = `${comments.length} comments loaded. Waiting for Julian to get angry...`;
+
+                // --- STEP 3: AUTONOMOUS REPLIES (Loop) ---
+                renderAndFight(comments, reviewText);
+
+            } catch (e) {
+                alert("Workflow failed: " + e.message);
+                startBtn.disabled = false;
+            }
+        };
+    }
+
+    async function renderAndFight(comments, originalReview) {
+        const list = document.getElementById('commentsList');
+        const status = document.getElementById('commentsStatus');
+
+        for (let i = 0; i < comments.length; i++) {
+            const commentData = comments[i];
+            
+            // Render the comment
+            const commentDiv = document.createElement('div');
+            commentDiv.className = 'comment';
+            commentDiv.innerHTML = `<div class="comment-user">${commentData.user} says:</div><div>${commentData.text}</div>`;
+            list.appendChild(commentDiv);
+
+            // Scroll to bottom of comments
+            commentDiv.scrollIntoView({ behavior: "smooth", block: "end" });
+
+            // 50% chance Julian ignores it to save API calls and seem aloof, 
+            // UNLESS it's a very negative comment (simulated by just forcing some)
+            // For demo purposes, let's make him reply to most of them aggressively.
+            if (Math.random() > 0.2) { 
+                status.innerHTML = `Julian is furiously typing a reply to ${commentData.user}<span class="loading-dots"></span>`;
+                
+                // Wait a moment to simulate typing/thinking
+                await new Promise(r => setTimeout(r, 1500 + Math.random() * 2000));
+
+                try {
+                     const replyPrompt = [
+                         { text: `ORIGINAL REVIEW:\n${originalReview}\n\nCOMMENT FROM ${commentData.user}:\n${commentData.text}\n\nReply to this specific comment now.` }
+                     ];
+                     
+                     // We don't use the main status loader here to avoid flickering
+                     const julianReply = await callGemini(JULIAN_REPLY_PROMPT, replyPrompt, null);
+
+                     const replyDiv = document.createElement('div');
+                     replyDiv.className = 'julian-reply';
+                     replyDiv.innerText = julianReply;
+                     commentDiv.appendChild(replyDiv);
+
+                } catch (e) {
+                    console.warn("Julian failed to reply to one comment:", e);
+                }
+            }
+        }
+        status.textContent = "Discourse complete. Everyone is angry.";
+        document.getElementById('startBtn').disabled = false;
+    }
+
+</script>
+</body>
+</html>
