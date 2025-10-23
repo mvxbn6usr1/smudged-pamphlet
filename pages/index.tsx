@@ -295,7 +295,7 @@ export default function SmudgedPamphlet() {
           title: 'Literary Critic',
           publication: 'The Smudged Pamphlet',
           color: 'emerald-400',
-          avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=margotashford&top=longHairStraight&eyebrows=raisedExcited',
+          avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=margotashford&top=straightAndStrand&eyebrows=raisedExcited',
           bio: 'Literary Critic, three PhDs and counting.'
         };
       case 'editor':

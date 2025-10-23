@@ -140,7 +140,7 @@ export default function ReviewPage() {
                 The Smudged<br/>Pamphlet
               </h1>
               <p className="mt-2 text-lg italic font-medium text-zinc-500">
-                Music criticism for people who hate music criticism.
+                Criticism for people who hate criticism.
               </p>
             </div>
             <button
