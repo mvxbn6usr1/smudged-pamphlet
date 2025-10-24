@@ -5,7 +5,6 @@ export interface YouTubeMetadata {
   channelTitle: string;
   description: string;
   categoryId: string;
-  isMusic: boolean;
   thumbnailUrl?: string;
 }
 

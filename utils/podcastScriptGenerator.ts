@@ -5,6 +5,11 @@ interface PodcastScript {
   line: string;
 }
 
+export interface PodcastSegment {
+  speakers: string[]; // Exactly 2 speakers for this segment
+  script: PodcastScript[];
+}
+
 interface PodcastGenerationOptions {
   reviewTitle: string;
   artist: string;
@@ -20,16 +25,25 @@ interface PodcastGenerationOptions {
   audioFileName?: string;
   isYouTube?: boolean;
   documentFileName?: string;
+  reviewCritics?: ('music' | 'film' | 'literary' | 'business')[]; // For editorial roundtables
+}
+
+export interface PodcastGenerationResult {
+  script: PodcastScript[] | PodcastSegment[];
+  albumArtPrompt: string;
 }
 
 /**
  * Generates a podcast script using AI orchestration
  * For single reviews: Chuck Morrison (host) + Review Author
  * For editorials: Chuck Morrison (host) + Multiple Critics (roundtable)
+ *
+ * Returns segments for multi-speaker scenarios (3+ speakers need to be split)
+ * Also generates an album art prompt for Gemini image generation
  */
 export async function generatePodcastScript(
   options: PodcastGenerationOptions
-): Promise<PodcastScript[]> {
+): Promise<PodcastGenerationResult> {
   const {
     reviewTitle,
     artist,
@@ -160,14 +174,14 @@ PODCAST GUIDELINES:
 8. Chuck wraps up with a brief closing statement
 9. Keep the total conversation to 15-25 exchanges (not too long)
 10. Use casual language, contractions, filler words ("you know", "I mean", "like", "uh", "um")
-11. Include vocalizations and reactions in asterisks: *sighs*, *laughs*, *scoffs*, *groans*, *chuckles*, *pauses*
+11. Include short one wordvocalizations and reactions in asterisks: *sighs*, *laughs*, *scoffs*, *groans*, *chuckles*, *pauses*
 12. Use phatic expressions: "Right?", "You see?", "Come on", "Seriously?", "Yeah, yeah", "Hold on", "Wait, wait"
 13. Make it sound like two people actually talking, not reading a script - be messy, overlap, interrupt
 
 FORMAT:
 Return ONLY the script in this exact format (no additional commentary):
 
-Chuck: [opening line with vocalizations like *chuckles* or *sighs* embedded naturally]
+Chuck: [opening line with vocalizations embedded naturally]
 ${criticInfo.name}: [response with reactions like *scoffs* or *laughs*]
 Chuck: [next line]
 ${criticInfo.name}: [response]
@@ -175,7 +189,7 @@ ${criticInfo.name}: [response]
 
 IMPORTANT: Include vocalizations WITHIN the dialogue text, like: "Well *chuckles* I don't know about that" or "*sighs* Look, here's the thing..."
 
-DO NOT include stage directions outside the dialogue. Keep it in "SpeakerName: Line" format with vocalizations embedded.`;
+DO NOT include stage directions beyond vocalizations. Keep it in "SpeakerName: Line" format with vocalizations embedded.`;
 
   try {
     const response = await fetch('/api/gemini/generate', {
@@ -222,13 +236,23 @@ DO NOT include stage directions outside the dialogue. Keep it in "SpeakerName: L
 async function generateEditorialRoundtable(
   options: PodcastGenerationOptions,
   comments: any[]
-): Promise<PodcastScript[]> {
+): Promise<PodcastScript[] | PodcastSegment[]> {
   const { reviewTitle, artist, score, summary, body } = options;
 
-  // Extract unique critics from comments
+  // Extract unique critics - prioritize reviewCritics if provided
   const validCriticTypes: CriticType[] = ['music', 'film', 'literary', 'business'];
   const participatingCritics = new Set<CriticType>();
 
+  // First, add critics from reviewCritics if available (for editorials with multiple reviews)
+  if (options.reviewCritics && options.reviewCritics.length > 0) {
+    options.reviewCritics.forEach(critic => {
+      if (validCriticTypes.includes(critic)) {
+        participatingCritics.add(critic);
+      }
+    });
+  }
+
+  // Also check comments for additional critics
   comments.forEach(comment => {
     // Check if comment has a critic type
     if (comment.critic && validCriticTypes.includes(comment.critic)) {
@@ -302,24 +326,35 @@ ROUNDTABLE GUIDELINES:
 11. Chuck gives a brief closing
 12. Total: 25-40 exchanges for a longer editorial discussion
 13. Use casual language, contractions, filler words ("you know", "I mean", "like", "uh", "um")
-14. Include vocalizations and reactions in asterisks: *sighs*, *laughs*, *scoffs*, *groans*, *chuckles*, *pauses*
+14. Include short one word vocalizations and reactions in asterisks: *sighs*, *laughs*, *scoffs*, *groans*, *chuckles*, *pauses*
 15. Use phatic expressions: "Right?", "You see?", "Come on", "Seriously?", "Yeah, yeah", "Hold on", "Wait, wait"
 16. Sound natural - be messy, overlap, interrupt, talk over each other
+${participatingCritics.size > 2 ? `
+17. SEGMENT STRUCTURE: Since there are ${participatingCritics.size} panelists, create natural conversation segments where Chuck focuses on ONE critic at a time:
+    - Start each segment with Chuck turning to the specific critic: "Let's hear from [Name]..." or "What do you think, [Name]?"
+    - Have 5-8 exchanges between Chuck and that critic
+    - End the segment with Chuck transitioning: "Thanks [Name]. Now let me turn to [NextName]..." or "Interesting. [NextName], your thoughts?"
+    - These transitions should feel natural, like a host managing speaking time
+    - insert "---SEGMENT BREAK---" between segments.
+    - Each critic gets their own segment with Chuck
+` : ''}
 
 FORMAT:
 Return ONLY the script in this exact format (no additional commentary):
 
-Chuck: [opening line with vocalizations like *chuckles* or *sighs* embedded naturally]
+Chuck: [opening line with vocalizations embedded naturally]
 ${criticInfos[0]?.name || 'Critic'}: [response with reactions]
 Chuck: [moderating comment]
 ${criticInfos[1]?.name || 'Critic'}: [response with reactions like *scoffs* or *laughs*]
+---SEGMENT BREAK---
+Chuck: [moderating comment]
+${criticInfos[1]?.name || 'Critic'}: [response with reactions like *scoffs* or *laughs*]
+Use exact names: "Chuck", "${criticInfos.map(c => c.name).join('", "')}"
 ...and so on
 
-Use exact names: "Chuck", "${criticInfos.map(c => c.name).join('", "')}"
+IMPORTANT: Include one word vocalizations WITHIN the dialogue text, like: "Well *chuckles* I don't know about that" or "*sighs* Look, here's the thing..."
 
-IMPORTANT: Include vocalizations WITHIN the dialogue text, like: "Well *chuckles* I don't know about that" or "*sighs* Look, here's the thing..."
-
-DO NOT include stage directions outside the dialogue. Keep it in "SpeakerName: Line" format with vocalizations embedded.`;
+DO NOT include stage or music directions beyond vocalizations your script only powers the dialogue itself. Keep it in "SpeakerName: Line" format with vocalizations embedded.`;
 
   try {
     const response = await fetch('/api/gemini/generate', {
@@ -353,6 +388,21 @@ DO NOT include stage directions outside the dialogue. Keep it in "SpeakerName: L
       throw new Error('No script text returned from API');
     }
 
+    console.log('Number of participating critics:', participatingCritics.size);
+    console.log('Critics:', Array.from(participatingCritics));
+
+    // Check if we need to segment (3+ total speakers = 2+ critics + Chuck)
+    // TTS API only supports exactly 2 speakers, so we need segments when we have 2+ critics
+    if (participatingCritics.size >= 2) {
+      console.log('Detected 3+ total speakers (Chuck + critics), checking for segment breaks in script...');
+      const criticNames = Array.from(participatingCritics).map(type => getCriticInfo(type).name);
+      console.log('Segment break markers found:', (scriptText.match(/---SEGMENT BREAK---|--- SEGMENT BREAK ---|SEGMENT BREAK/gi) || []).length);
+      const segments = parseScriptToSegments(scriptText, criticNames);
+      console.log('Parsed into', segments.length, 'segments');
+      return segments;
+    }
+
+    console.log('Only 2 total speakers (Chuck + 1 critic), returning flat script');
     return parseScriptToStructured(scriptText);
   } catch (error) {
     console.error('Error generating editorial podcast script:', error);
@@ -382,6 +432,60 @@ function parseScriptToStructured(scriptText: string): PodcastScript[] {
   }
 
   return script;
+}
+
+/**
+ * Parse segmented script (for 3+ speakers) into segments with 2 speakers each
+ * Splits on "---SEGMENT BREAK---" markers
+ */
+function parseScriptToSegments(scriptText: string, criticNames: string[]): PodcastSegment[] {
+  const segments: PodcastSegment[] = [];
+
+  // Split by segment break marker
+  const segmentTexts = scriptText.split(/---SEGMENT BREAK---|--- SEGMENT BREAK ---|SEGMENT BREAK/i);
+
+  for (const segmentText of segmentTexts) {
+    if (!segmentText.trim()) continue;
+
+    const script = parseScriptToStructured(segmentText);
+    if (script.length === 0) continue;
+
+    // Identify unique speakers in this segment
+    const uniqueSpeakers = Array.from(new Set(script.map(s => s.speaker)));
+
+    // If this segment has 3+ speakers, we need to split it further
+    // This happens when the AI doesn't properly segment the script
+    if (uniqueSpeakers.length > 2) {
+      console.warn(`Segment has ${uniqueSpeakers.length} speakers (${uniqueSpeakers.join(', ')}), force-splitting by critic...`);
+
+      // Chuck should be in every segment
+      const chuckName = 'Chuck';
+      const critics = uniqueSpeakers.filter(s => s !== chuckName);
+
+      // Create one segment for each critic (Chuck + that critic)
+      for (const critic of critics) {
+        const segmentScript = script.filter(line =>
+          line.speaker === chuckName || line.speaker === critic
+        );
+
+        if (segmentScript.length > 0) {
+          console.log(`Created sub-segment: ${chuckName} + ${critic} (${segmentScript.length} lines)`);
+          segments.push({
+            speakers: [chuckName, critic],
+            script: segmentScript
+          });
+        }
+      }
+    } else {
+      // Proper 2-speaker segment
+      segments.push({
+        speakers: uniqueSpeakers.slice(0, 2), // Ensure exactly 2
+        script
+      });
+    }
+  }
+
+  return segments;
 }
 
 /**

@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/router';
-import { ArrowLeft, FileText, Check, MessageSquare, Archive, X, ThumbsDown, ChevronDown, Zap, Podcast } from 'lucide-react';
+import { ArrowLeft, FileText, Check, MessageSquare, Archive, X, ThumbsDown, ChevronDown, Zap, Podcast, Download } from 'lucide-react';
 import clsx from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import { getAudioData } from '@/utils/db';
+import { getAudioData, getPodcastAlbumArt, deletePodcastAudio, deletePodcastAlbumArt, getBannerImage } from '@/utils/db';
 import { getStaffInfo as getStaffInfoUtil, getCriticInfo as getCriticInfoUtil, getCriticPersona } from '@/utils/critics';
 import type { CriticType } from '@/utils/critics';
 import { generatePodcast, getExistingPodcast, type PodcastGenerationProgress } from '@/utils/podcastOrchestrator';
@@ -116,8 +116,13 @@ export default function Editorial() {
 
   // Podcast state
   const [podcastUrl, setPodcastUrl] = useState<string | undefined>();
+  const [podcastAlbumArt, setPodcastAlbumArt] = useState<string | undefined>();
   const [isPodcastGenerating, setIsPodcastGenerating] = useState(false);
   const [podcastProgress, setPodcastProgress] = useState<PodcastGenerationProgress | null>(null);
+  const [podcastQuality, setPodcastQuality] = useState<'high' | 'fast'>('high');
+
+  // Banner image state
+  const [bannerImage, setBannerImage] = useState<string | undefined>();
   const commentCountRef = useRef(0);
   const organicTimerRef = useRef<NodeJS.Timeout | null>(null);
   const isMountedRef = useRef(true);
@@ -166,21 +171,72 @@ export default function Editorial() {
           const existingPodcast = await getExistingPodcast(editorial.id);
           if (existingPodcast) {
             setPodcastUrl(existingPodcast);
+
+            // Load album art from IndexedDB
+            const albumArt = await getPodcastAlbumArt(editorial.id);
+            if (albumArt) {
+              setPodcastAlbumArt(`data:${albumArt.mimeType};base64,${albumArt.imageData}`);
+            }
           } else {
             setPodcastUrl(undefined);
+            setPodcastAlbumArt(undefined);
           }
         } catch (e) {
           console.error('Failed to check for podcast', e);
         }
       };
       loadPodcast();
+
+      // Load banner image from IndexedDB
+      const loadBanner = async () => {
+        try {
+          const banner = await getBannerImage(editorial.id);
+          if (banner) {
+            setBannerImage(`data:${banner.mimeType};base64,${banner.imageData}`);
+          } else {
+            setBannerImage(undefined);
+          }
+        } catch (e) {
+          console.error('Failed to load banner image', e);
+        }
+      };
+      loadBanner();
     } else {
       setPodcastUrl(undefined);
+      setPodcastAlbumArt(undefined);
+      setBannerImage(undefined);
     }
   }, [editorial?.id]);
 
   const handleGenerateEditorialPodcast = async () => {
     if (!editorial || !editorial.id) return;
+
+    // Get the original reviews to extract critic types
+    const storedReviews = localStorage.getItem('smudged_reviews');
+    let reviewCritics: ('music' | 'film' | 'literary' | 'business')[] = [];
+
+    if (storedReviews && editorial.reviewIds) {
+      try {
+        const allReviews: SavedReview[] = JSON.parse(storedReviews);
+        const editorialReviews = allReviews.filter(r => editorial.reviewIds.includes(r.id));
+        reviewCritics = editorialReviews
+          .map(r => r.review.critic)
+          .filter((c): c is 'music' | 'film' | 'literary' | 'business' => !!c);
+      } catch (e) {
+        console.error('Failed to load reviews for podcast generation', e);
+      }
+    }
+
+    // Enhance comments with critic info from original reviews
+    const enhancedComments = comments.map(comment => {
+      // If this comment doesn't have a critic field, try to infer it from the comment metadata
+      if (!comment.critic && comment.is_critic) {
+        // Check if the username matches a critic name and assign the type
+        const matchingReview = reviewCritics.length > 0 ? reviewCritics[0] : undefined;
+        return { ...comment, critic: matchingReview };
+      }
+      return comment;
+    });
 
     // Create a review-like object for the podcast generator
     const editorialReview = {
@@ -191,10 +247,12 @@ export default function Editorial() {
         score: 0, // Not applicable for editorials
         summary: editorial.summary,
         body: editorial.body,
-        critic: 'music' as const, // Default, will be overridden by participants
+        critic: reviewCritics[0] || 'music' as const, // Use first critic as primary
         criticName: 'Editorial Team',
       },
-      comments,
+      comments: enhancedComments,
+      // Pass the list of participating critics
+      reviewCritics,
     };
 
     setIsPodcastGenerating(true);
@@ -207,9 +265,16 @@ export default function Editorial() {
     try {
       const audioDataUrl = await generatePodcast(editorialReview, true, (progress) => {
         setPodcastProgress(progress);
-      });
+      }, podcastQuality);
 
       setPodcastUrl(audioDataUrl);
+
+      // Load album art from IndexedDB (saved during generation)
+      const albumArt = await getPodcastAlbumArt(editorial.id);
+      if (albumArt) {
+        setPodcastAlbumArt(`data:${albumArt.mimeType};base64,${albumArt.imageData}`);
+      }
+
       setIsPodcastGenerating(false);
       setPodcastProgress(null);
     } catch (error) {
@@ -221,6 +286,42 @@ export default function Editorial() {
         message: 'Failed to generate podcast',
         error: error instanceof Error ? error.message : 'Unknown error',
       });
+    }
+  };
+
+  const handleDownloadPodcast = () => {
+    if (!podcastUrl || !editorial) return;
+
+    const link = document.createElement('a');
+    link.href = podcastUrl;
+    link.download = `editorial-${editorial.id}-podcast.wav`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleDeletePodcast = async () => {
+    if (!editorial) return;
+
+    const confirmDelete = window.confirm(
+      'Are you sure you want to delete this podcast? You can regenerate it afterwards.'
+    );
+
+    if (!confirmDelete) return;
+
+    try {
+      // Delete both audio and album art from IndexedDB
+      await deletePodcastAudio(editorial.id);
+      await deletePodcastAlbumArt(editorial.id);
+
+      // Clear state
+      setPodcastUrl(undefined);
+      setPodcastAlbumArt(undefined);
+
+      console.log('Podcast deleted successfully');
+    } catch (error) {
+      console.error('Failed to delete podcast:', error);
+      alert('Failed to delete podcast. Please try again.');
     }
   };
 
@@ -396,17 +497,64 @@ Output ONLY valid JSON:
     }
   };
 
-  const saveEditorial = () => {
-    if (!editorial) return;
+  const saveEditorial = async () => {
+    if (!editorial) {
+      console.error('No editorial to save');
+      return;
+    }
 
-    const editorialToSave: SavedEditorial = {
-      ...editorial,
-      comments: comments
-    };
+    console.log('Saving editorial:', editorial.id);
 
-    const updated = [editorialToSave, ...savedEditorials];
-    setSavedEditorials(updated);
-    localStorage.setItem('smudged_editorials', JSON.stringify(updated));
+    try {
+      const editorialToSave: SavedEditorial = {
+        ...editorial,
+        comments: comments
+      };
+
+      console.log('Saving editorial to localStorage...');
+      const updated = [editorialToSave, ...savedEditorials];
+      setSavedEditorials(updated);
+      localStorage.setItem('smudged_editorials', JSON.stringify(updated));
+      console.log('Editorial saved successfully!');
+      alert('Editorial saved successfully!');
+
+      // Generate banner image in background (don't wait for it)
+      console.log('Generating banner for editorial in background...');
+      const editorialText = editorial.body.join('\n\n');
+      fetch('/api/generate-banner', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: editorial.title,
+          artist: editorial.subject,
+          reviewText: editorialText,
+          isEditorial: true,
+          criticNames: editorial.reviewCritics?.map((c: CriticType) => {
+            const info = getCriticInfo(c);
+            return info.name;
+          })
+        }),
+      })
+        .then(async (bannerResponse) => {
+          if (bannerResponse.ok) {
+            const { imageData, mimeType } = await bannerResponse.json();
+            const { saveBannerImage } = await import('@/utils/db');
+            await saveBannerImage(editorial.id, { imageData, mimeType });
+            // Update the banner image state to display it immediately
+            setBannerImage(`data:${mimeType};base64,${imageData}`);
+            console.log('Banner image generated and saved for editorial');
+          } else {
+            console.warn('Banner generation failed with status:', bannerResponse.status);
+          }
+        })
+        .catch((error) => {
+          console.error('Banner generation error:', error);
+        });
+
+    } catch (error) {
+      console.error('Failed to save editorial:', error);
+      alert(`Failed to save editorial: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   };
 
   // Organic comment generation for editorial
@@ -1015,6 +1163,19 @@ Generate a new comment. Output: {"username":"name","persona_type":"type","text":
           </div>
         ) : (
           <div className="space-y-8">
+            {/* Banner Image */}
+            {bannerImage && (
+              <div className="animate-in fade-in slide-in-from-top-4 duration-700">
+                <div className="relative w-full aspect-[16/9] border-4 border-zinc-900 shadow-[8px_8px_0px_0px_rgba(24,24,27,1)] overflow-hidden bg-zinc-900">
+                  <img
+                    src={bannerImage}
+                    alt={`Banner for ${editorial.title}`}
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+              </div>
+            )}
+
             <div className="bg-white border-4 border-red-500 p-8 md:p-12 shadow-[8px_8px_0px_0px_rgba(220,38,38,1)]">
               <div className="border-b-4 border-zinc-900 pb-6 mb-6">
                 <div className="flex items-center gap-3 mb-2">
@@ -1095,12 +1256,24 @@ Generate a new comment. Output: {"username":"name","persona_type":"type","text":
 
               {podcastUrl ? (
                 <div className="space-y-4">
-                  <p className="text-zinc-600 italic">
-                    Listen to Chuck Morrison host a roundtable discussion with the critics about this editorial.
-                  </p>
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-zinc-600 italic">
+                      Listen to Chuck Morrison host a roundtable discussion with our featured critics about this editorial.
+                    </p>
+                    <button
+                      onClick={handleDownloadPodcast}
+                      className="flex items-center gap-2 bg-zinc-900 text-white px-4 py-2 font-black uppercase text-xs hover:bg-zinc-800 transition-colors"
+                      title="Download podcast"
+                    >
+                      <Download className="w-4 h-4" />
+                      Download
+                    </button>
+                  </div>
                   <AudioPlayer
                     audioUrl={podcastUrl}
                     audioFileName={`editorial-${editorial.id}-podcast.wav`}
+                    albumArt={podcastAlbumArt}
+                    onDelete={handleDeletePodcast}
                   />
                 </div>
               ) : isPodcastGenerating ? (
@@ -1140,9 +1313,41 @@ Generate a new comment. Output: {"username":"name","persona_type":"type","text":
                 <div className="space-y-4">
                   <p className="text-zinc-600">
                     Want to hear a roundtable discussion about this editorial? Generate a podcast where Chuck Morrison
-                    hosts a conversation with all the critics who participated in the comments about
+                    hosts a conversation with the critics whose reviews were featured in
                     &quot;{editorial.title}&quot;.
                   </p>
+
+                  {/* Quality Selection */}
+                  <div className="space-y-2">
+                    <label className="block text-sm font-bold text-zinc-700 uppercase tracking-wide">
+                      Podcast Quality
+                    </label>
+                    <div className="flex gap-4">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="podcastQuality"
+                          value="high"
+                          checked={podcastQuality === 'high'}
+                          onChange={(e) => setPodcastQuality(e.target.value as 'high' | 'fast')}
+                          className="w-4 h-4 accent-zinc-900"
+                        />
+                        <span className="text-sm font-medium">Higher Quality (slower)</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="podcastQuality"
+                          value="fast"
+                          checked={podcastQuality === 'fast'}
+                          onChange={(e) => setPodcastQuality(e.target.value as 'high' | 'fast')}
+                          className="w-4 h-4 accent-zinc-900"
+                        />
+                        <span className="text-sm font-medium">Faster Generation</span>
+                      </label>
+                    </div>
+                  </div>
+
                   <button
                     onClick={handleGenerateEditorialPodcast}
                     className="flex items-center gap-2 bg-zinc-900 text-white px-6 py-3 font-black uppercase text-sm hover:bg-zinc-800 transition-colors"

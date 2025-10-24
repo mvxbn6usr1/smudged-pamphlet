@@ -1,14 +1,29 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Play, Pause } from 'lucide-react';
+import { Play, Pause, Trash2 } from 'lucide-react';
+
+// Sanitize podcast filename for display
+function sanitizeAudioFileName(filename: string): string {
+  // Remove -podcast.wav suffix
+  filename = filename.replace(/-podcast\.wav$/i, '');
+
+  // Replace hyphens with spaces
+  filename = filename.replace(/-/g, ' ');
+
+  // Capitalize first letter of each word
+  return filename.split(' ').map(word =>
+    word.charAt(0).toUpperCase() + word.slice(1)
+  ).join(' ');
+}
 
 interface AudioPlayerProps {
   audioUrl?: string;
   audioFileName?: string;
   albumArt?: string;
   waveformData?: number[];
+  onDelete?: () => void;
 }
 
-export default function AudioPlayer({ audioUrl, audioFileName, albumArt, waveformData }: AudioPlayerProps) {
+export default function AudioPlayer({ audioUrl, audioFileName, albumArt, waveformData, onDelete }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -54,8 +69,19 @@ export default function AudioPlayer({ audioUrl, audioFileName, albumArt, wavefor
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   return (
-    <div className="bg-zinc-100 border-2 border-zinc-900 p-6 rounded-sm mb-8 shadow-[4px_4px_0px_0px_rgba(24,24,27,1)]">
+    <div className="bg-zinc-100 border-2 border-zinc-900 p-6 rounded-sm mb-8 shadow-[4px_4px_0px_0px_rgba(24,24,27,1)] relative">
       {audioUrl && <audio ref={audioRef} src={audioUrl} />}
+
+      {/* Delete button */}
+      {onDelete && (
+        <button
+          onClick={onDelete}
+          className="absolute top-4 right-4 bg-red-600 text-white p-2 rounded-sm hover:bg-red-700 transition-colors shadow-md"
+          title="Delete podcast"
+        >
+          <Trash2 className="w-4 h-4" />
+        </button>
+      )}
 
       <div className="flex gap-6">
         {/* Album Art */}
@@ -72,7 +98,7 @@ export default function AudioPlayer({ audioUrl, audioFileName, albumArt, wavefor
         <div className="flex-1 flex flex-col justify-between">
           {/* Track Info */}
           <div className="font-mono text-sm text-zinc-600 mb-2">
-            {audioFileName ? `[AUDIO: ${audioFileName}]` : '[NO AUDIO AVAILABLE]'}
+            {audioFileName ? `[AUDIO: ${sanitizeAudioFileName(audioFileName)}]` : '[NO AUDIO AVAILABLE]'}
           </div>
 
           {/* Waveform Visualization - Symmetrical */}

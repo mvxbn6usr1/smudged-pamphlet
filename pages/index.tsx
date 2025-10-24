@@ -5,7 +5,7 @@ import { twMerge } from 'tailwind-merge';
 import { useRouter } from 'next/router';
 import AudioPlayer from '@/components/AudioPlayer';
 import DocumentPreview from '@/components/DocumentPreview';
-import { saveAudioData, getAudioData, deleteAudioData } from '@/utils/db';
+import { saveAudioData, getAudioData, deleteAudioData, getBannerImage } from '@/utils/db';
 import { fetchYouTubeMetadataServerSide, extractYouTubeId as extractYouTubeIdUtil, ServerSideGeminiAI } from '@/utils/api';
 import { getCriticInfo as getCriticInfoUtil, getStaffInfo as getStaffInfoUtil, getCriticPersona } from '@/utils/critics';
 import { sanitizeUsername, sanitizeText } from '@/utils/sanitize';
@@ -110,6 +110,7 @@ export default function SmudgedPamphlet() {
   const [showSavePrompt, setShowSavePrompt] = useState(false);
   const [showArchive, setShowArchive] = useState(false);
   const [albumArt, setAlbumArt] = useState<string | undefined>();
+  const [bannerImage, setBannerImage] = useState<string | undefined>();
   const [waveformData, setWaveformData] = useState<number[]>([]);
   const [currentAudioPart, setCurrentAudioPart] = useState<any>(null);
   const [commentGenerationActive, setCommentGenerationActive] = useState(false);
@@ -131,6 +132,30 @@ export default function SmudgedPamphlet() {
       }
     }
   }, []);
+
+  // Load banner image when currentReviewId changes
+  useEffect(() => {
+    if (!currentReviewId) {
+      setBannerImage(undefined);
+      return;
+    }
+
+    const loadBanner = async () => {
+      try {
+        const banner = await getBannerImage(currentReviewId);
+        if (banner) {
+          setBannerImage(`data:${banner.mimeType};base64,${banner.imageData}`);
+        } else {
+          setBannerImage(undefined);
+        }
+      } catch (e) {
+        console.error('Failed to load banner image', e);
+        setBannerImage(undefined);
+      }
+    };
+
+    loadBanner();
+  }, [currentReviewId]);
 
   const addLog = (msg: string) => setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
 
@@ -165,7 +190,7 @@ export default function SmudgedPamphlet() {
     return null;
   };
 
-  const fetchYouTubeMetadata = async (youtubeUrl: string): Promise<{ title?: string; author_name?: string; isMusic?: boolean }> => {
+  const fetchYouTubeMetadata = async (youtubeUrl: string): Promise<{ title?: string; author_name?: string; description?: string }> => {
     try {
       const videoId = extractYouTubeIdUtil(youtubeUrl);
       if (!videoId) {
@@ -177,7 +202,7 @@ export default function SmudgedPamphlet() {
       return {
         title: metadata.title,
         author_name: metadata.channelTitle,
-        isMusic: metadata.isMusic
+        description: metadata.description
       };
     } catch (e) {
       console.error('Failed to fetch YouTube metadata:', e);
@@ -230,45 +255,33 @@ export default function SmudgedPamphlet() {
 
   const determineContentCritic = async (
     fileType: string | null,
-    fileName: string | null,
-    youtubeUrl: string | null
-  ): Promise<{ critic: CriticType; metadata?: any }> => {
-    // YouTube content
-    if (youtubeUrl) {
-      const metadata = await fetchYouTubeMetadata(youtubeUrl);
-      // Server-side API now determines if it's music
-      const isMusic = metadata.isMusic ?? false;
-      return {
-        critic: isMusic ? 'music' : 'film',
-        metadata
-      };
-    }
-
-    // Local file
+    fileName: string | null
+  ): Promise<CriticType> => {
+    // Local file classification only (YouTube is handled separately with AI classifier)
     if (fileType) {
       // Audio files -> Music Critic (Julian)
       if (fileType.startsWith('audio/')) {
-        return { critic: 'music' };
+        return 'music';
       }
 
       // Video files -> Film Critic (Rex)
       if (fileType.startsWith('video/')) {
-        return { critic: 'film' };
+        return 'film';
       }
 
-      // Document files -> Literary Critic (Margot)
+      // Document files -> Literary Critic (Margot) - will be further classified
       if (
         fileType === 'application/pdf' ||
         fileType === 'text/plain' ||
         fileType.includes('document') ||
         fileType.includes('text')
       ) {
-        return { critic: 'literary' };
+        return 'literary';
       }
     }
 
     // Default to music if we can't determine
-    return { critic: 'music' };
+    return 'music';
   };
 
   async function extractAudioMetadata(file: File): Promise<{ albumArt?: string; title?: string; artist?: string; album?: string }> {
@@ -509,6 +522,81 @@ export default function SmudgedPamphlet() {
     }
   };
 
+  const classifyYouTubeVideo = async (genAI: ServerSideGeminiAI, title: string, channelTitle: string, description: string): Promise<'music' | 'film' | 'business'> => {
+    addLog('AGENT ACTIVATED: YouTube Video Classifier');
+    addLog('ACTION: Analyzing video type...');
+
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+
+    const prompt = `You are a content classifier for 'The Smudged Pamphlet'.
+
+Analyze the provided YouTube video metadata and determine if it is:
+- MUSIC: Music videos, live performances, concerts, artist content, albums, singles, lyric videos, music documentaries
+- BUSINESS: Educational content, business analysis, tutorials, courses, conferences, TED talks, webinars, how-to guides, interviews about business/tech/startups, corporate content, educational explainers
+- FILM: Movies, movie trailers, film analysis, entertainment content, TV shows, narrative video content, vlogs, general video essays
+
+VIDEO METADATA:
+Title: "${title}"
+Channel: "${channelTitle}"
+Description: ${description.substring(0, 500)}
+
+IMPORTANT:
+- Music videos should be "music" even if they have cinematic qualities
+- Educational/tutorial content is "business" not "film"
+- Movie reviews and film analysis are "film"
+- Corporate presentations and business education are "business"
+
+Output ONLY valid JSON:
+{
+  "classification": "music" or "business" or "film",
+  "confidence": "high" or "medium" or "low",
+  "reasoning": "Brief explanation (one sentence)"
+}`;
+
+    try {
+      const result = await model.generateContent({
+        contents: [
+          { role: 'user', parts: [{ text: prompt }] }
+        ],
+        generationConfig: {
+          responseMimeType: 'application/json',
+          temperature: 0.1
+        }
+      });
+
+      const classificationText = result.response.text();
+
+      // Validate JSON parsing
+      let classification;
+      try {
+        classification = JSON.parse(classificationText);
+      } catch (parseError) {
+        addLog('ERROR: Failed to parse classification JSON, defaulting to film');
+        return 'film';
+      }
+
+      // Validate classification value
+      if (!classification || typeof classification.classification !== 'string') {
+        addLog('ERROR: Invalid classification structure, defaulting to film');
+        return 'film';
+      }
+
+      const classValue = classification.classification.toLowerCase();
+      if (classValue !== 'music' && classValue !== 'business' && classValue !== 'film') {
+        addLog(`WARNING: Invalid classification "${classValue}", defaulting to film`);
+        return 'film';
+      }
+
+      addLog(`CLASSIFICATION: ${classValue.toUpperCase()} (${classification.confidence || 'unknown'} confidence)`);
+      addLog(`REASON: ${classification.reasoning || 'No reasoning provided'}`);
+
+      return classValue as 'music' | 'film' | 'business';
+    } catch (e: any) {
+      addLog(`ERROR: Classification failed (${e.message}), defaulting to film`);
+      return 'film';
+    }
+  };
+
   const classifyDocument = async (genAI: ServerSideGeminiAI, documentPart: GeminiMediaPart): Promise<'literary' | 'business'> => {
     addLog('AGENT ACTIVATED: Document Classifier');
     addLog('ACTION: Analyzing document type...');
@@ -646,22 +734,26 @@ Output ONLY valid JSON:
     }
   };
 
-  const runPatriciaReview = async (genAI: ServerSideGeminiAI, documentPart: GeminiMediaPart) => {
+  const runPatriciaReview = async (genAI: ServerSideGeminiAI, contentPart: GeminiMediaPart, isYouTube: boolean = false, metadata?: any) => {
     setStage('patricia_reviewing');
     addLog('AGENT ACTIVATED: Patricia Chen (Business Editor)');
-    addLog('ACTION: Patricia is opening the document with her red pen ready...');
+    addLog(isYouTube
+      ? 'ACTION: Patricia is watching the video with her corporate BS detector on high alert...'
+      : 'ACTION: Patricia is opening the document with her red pen ready...');
 
     const model = genAI.getGenerativeModel({ model: 'gemini-2.5-pro' });
 
     const systemPrompt = getCriticPersona('business', {
-      context: 'review'
+      context: 'review',
+      isYouTube,
+      metadata
     });
 
     try {
       const result = await model.generateContent({
         contents: [
           { role: 'user', parts: [{ text: systemPrompt }] },
-          { role: 'user', parts: [documentPart] }
+          { role: 'user', parts: [contentPart] }
         ],
         generationConfig: {
           responseMimeType: 'application/json'
@@ -673,7 +765,9 @@ Output ONLY valid JSON:
       reviewData.critic = 'business';
       reviewData.criticName = 'Patricia Chen';
       setReview(reviewData);
-      addLog('SUCCESS: Patricia has cut through the corporate speak.');
+      addLog(isYouTube
+        ? 'SUCCESS: Patricia has dismantled their thought leadership.'
+        : 'SUCCESS: Patricia has cut through the corporate speak.');
       return reviewData;
     } catch (e: any) {
       throw new Error(`Patricia refused to work: ${e.message}`);
@@ -1393,20 +1487,36 @@ Output: {"reply_text":"reply"}`;
         // YouTube URL mode
         addLog(`SYSTEM: Processing YouTube URL: ${youtubeUrl}`);
 
-        // Determine which critic should handle this
-        const { critic, metadata: ytMetadata } = await determineContentCritic(null, null, youtubeUrl);
-        criticType = critic;
+        // Fetch YouTube metadata first
+        const ytMetadata = await fetchYouTubeMetadata(youtubeUrl);
 
         if (ytMetadata && ytMetadata.title) {
           addLog(`SYSTEM: Video Title: "${ytMetadata.title}"`);
           addLog(`SYSTEM: Creator: ${ytMetadata.author_name || 'Unknown'}`);
-          addLog(`SYSTEM: Routing to ${critic === 'music' ? 'Julian Pinter (Music)' : 'Rex Beaumont (Film)'}`);
+
+          // Use AI classifier to determine content type
+          criticType = await classifyYouTubeVideo(
+            genAI,
+            ytMetadata.title || 'Unknown',
+            ytMetadata.author_name || 'Unknown',
+            ytMetadata.description || ''
+          );
+
+          const criticNames = {
+            music: 'Julian Pinter (Music)',
+            film: 'Rex Beaumont (Film)',
+            business: 'Patricia Chen (Business)',
+            literary: 'Margot Ashford (Literary)'
+          };
+          addLog(`SYSTEM: Routing to ${criticNames[criticType]}`);
+
           metadata = {
             title: ytMetadata.title,
             artist: ytMetadata.author_name || 'YouTube Creator'
           };
         } else {
           addLog(`SYSTEM: Could not fetch video metadata`);
+          criticType = 'film'; // Default fallback
         }
 
         contentPart = {
@@ -1421,13 +1531,12 @@ Output: {"reply_text":"reply"}`;
         }
 
         // Determine which critic should handle this file
-        const { critic } = await determineContentCritic(audioFile!.type, audioFile!.name, null);
-        criticType = critic;
+        criticType = await determineContentCritic(audioFile!.type, audioFile!.name);
 
         addLog(`SYSTEM: File type: ${audioFile!.type}`);
         addLog(`SYSTEM: Routing to ${
-          critic === 'music' ? 'Julian Pinter (Music)' :
-          critic === 'film' ? 'Rex Beaumont (Film)' :
+          criticType === 'music' ? 'Julian Pinter (Music)' :
+          criticType === 'film' ? 'Rex Beaumont (Film)' :
           'Margot Ashford (Literary)'
         }`);
 
@@ -1435,7 +1544,7 @@ Output: {"reply_text":"reply"}`;
         const fileArrayBuffer = await audioFile!.arrayBuffer();
 
         // Extract metadata if audio file
-        if (critic === 'music') {
+        if (criticType === 'music') {
           metadata = await extractAudioMetadata(audioFile!);
           addLog(`SYSTEM: Extracted metadata - Title: ${metadata.title || 'Unknown'}, Artist: ${metadata.artist || 'Unknown'}`);
         }
@@ -1460,6 +1569,9 @@ Output: {"reply_text":"reply"}`;
         reviewData.criticName = 'Julian Pinter';
       } else if (criticType === 'film') {
         reviewData = await runRexReview(genAI, contentPart, metadata, isYouTube);
+      } else if (criticType === 'business') {
+        // Business critic handles business videos and documents
+        reviewData = await runPatriciaReview(genAI, contentPart, isYouTube, metadata);
       } else if (criticType === 'literary') {
         // For documents, classify first to determine literary vs business
         const documentType = await classifyDocument(genAI, contentPart);
@@ -1508,10 +1620,43 @@ Output: {"reply_text":"reply"}`;
 
       setStage('complete');
       addLog('SYSTEM: Initial review and comments complete!');
+
+      // Generate reviewId early for banner generation
+      const slug = `${reviewData.artist.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${reviewData.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+      const reviewId = Date.now().toString();
+
+      // Generate banner image BEFORE auto-save
+      addLog('SYSTEM: Generating banner image...');
+      try {
+        const reviewText = reviewData.body.join('\n\n');
+        const bannerResponse = await fetch('/api/generate-banner', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: reviewData.title,
+            artist: reviewData.artist,
+            reviewText,
+            isEditorial: false
+          }),
+        });
+
+        if (bannerResponse.ok) {
+          const { imageData, mimeType } = await bannerResponse.json();
+          const { saveBannerImage } = await import('@/utils/db');
+          await saveBannerImage(reviewId, { imageData, mimeType });
+          addLog('SUCCESS: Banner image generated and saved.');
+        } else {
+          addLog('WARNING: Failed to generate banner image, proceeding without it.');
+        }
+      } catch (error) {
+        console.error('Banner generation error:', error);
+        addLog('WARNING: Banner generation failed, proceeding without it.');
+      }
+
       addLog('SYSTEM: Auto-saving review...');
 
       // Auto-save the review immediately before organic comments start
-      await autoSaveReview(reviewData, currentComments);
+      await autoSaveReview(reviewData, currentComments, reviewId, slug);
 
       addLog('SYSTEM: Review saved! Comments will continue organically for 5 minutes...');
 
@@ -1528,11 +1673,8 @@ Output: {"reply_text":"reply"}`;
     }
   };
 
-  const autoSaveReview = async (reviewData: ReviewData, currentComments: Comment[]) => {
+  const autoSaveReview = async (reviewData: ReviewData, currentComments: Comment[], reviewId: string, slug: string) => {
     const isYouTube = !!youtubeUrl && !audioFile;
-
-    const slug = `${reviewData.artist.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${reviewData.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
-    const reviewId = Date.now().toString();
 
     let albumArtData: string | undefined;
     let waveformData: number[] = [];
@@ -1605,6 +1747,34 @@ Output: {"reply_text":"reply"}`;
       generateWaveformData(audioFile)
     ]);
     const albumArt = metadata.albumArt;
+
+    // Generate banner image
+    addLog('SYSTEM: Generating banner image...');
+    try {
+      const reviewText = review.body.join('\n\n');
+      const bannerResponse = await fetch('/api/generate-banner', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: review.title,
+          artist: review.artist,
+          reviewText,
+          isEditorial: false
+        }),
+      });
+
+      if (bannerResponse.ok) {
+        const { imageData, mimeType } = await bannerResponse.json();
+        const { saveBannerImage } = await import('@/utils/db');
+        await saveBannerImage(reviewId, { imageData, mimeType });
+        addLog('SUCCESS: Banner image generated and saved.');
+      } else {
+        addLog('WARNING: Failed to generate banner image, proceeding without it.');
+      }
+    } catch (error) {
+      console.error('Banner generation error:', error);
+      addLog('WARNING: Banner generation failed, proceeding without it.');
+    }
 
     // Convert audio file to data URL
     const audioDataUrl = await new Promise<string>((resolve) => {
@@ -1823,7 +1993,14 @@ Output: {"reply_text":"reply"}`;
       }
 
       setAudioFile(file);
-      setAudioUrl(URL.createObjectURL(file));
+
+      // Convert to data URL for stable playback (blob URLs can become invalid)
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setAudioUrl(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+
       setReview(null);
       setComments([]);
 
@@ -2261,6 +2438,19 @@ Output: {"reply_text":"reply"}`;
                              })()}
                         </div>
                     </div>
+
+                    {/* Banner Image */}
+                    {bannerImage && (
+                      <div className="my-8 animate-in fade-in slide-in-from-top-4 duration-700">
+                        <div className="relative w-full aspect-[16/9] border-4 border-zinc-900 shadow-[8px_8px_0px_0px_rgba(24,24,27,1)] overflow-hidden bg-zinc-900">
+                          <img
+                            src={bannerImage}
+                            alt={`Banner for ${review.title}`}
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                      </div>
+                    )}
 
                     {youtubeUrl ? (
                       <div className="my-8">
