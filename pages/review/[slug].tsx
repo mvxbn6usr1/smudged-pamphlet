@@ -80,6 +80,7 @@ interface SavedReview {
   hasAudioInDB?: boolean;
   youtubeUrl?: string;
   isYouTube?: boolean;
+  hasPodcastInDB?: boolean;
 }
 
 export default function ReviewPage() {
@@ -94,7 +95,7 @@ export default function ReviewPage() {
   const [podcastAlbumArt, setPodcastAlbumArt] = useState<string | undefined>();
   const [isPodcastGenerating, setIsPodcastGenerating] = useState(false);
   const [podcastProgress, setPodcastProgress] = useState<PodcastGenerationProgress | null>(null);
-  const [podcastQuality, setPodcastQuality] = useState<'high' | 'fast'>('high');
+  const [podcastQuality, setPodcastQuality] = useState<'high' | 'fast'>('fast');
 
   // Banner image state
   const [bannerImage, setBannerImage] = useState<string | undefined>();
@@ -190,16 +191,26 @@ export default function ReviewPage() {
     });
 
     try {
-      const audioDataUrl = await generatePodcast(review, false, (progress) => {
+      const result = await generatePodcast(review, false, (progress) => {
         setPodcastProgress(progress);
       }, podcastQuality);
 
-      setPodcastUrl(audioDataUrl);
+      setPodcastUrl(result.audioDataUrl);
 
       // Load album art from IndexedDB (saved during generation)
       const albumArt = await getPodcastAlbumArt(review.id);
       if (albumArt) {
         setPodcastAlbumArt(`data:${albumArt.mimeType};base64,${albumArt.imageData}`);
+      }
+
+      // Update localStorage to mark that this review has a podcast
+      const storedReviews = localStorage.getItem('smudged_reviews');
+      if (storedReviews) {
+        const reviews: SavedReview[] = JSON.parse(storedReviews);
+        const updatedReviews = reviews.map(r =>
+          r.id === review.id ? { ...r, hasPodcastInDB: true } : r
+        );
+        localStorage.setItem('smudged_reviews', JSON.stringify(updatedReviews));
       }
 
       setIsPodcastGenerating(false);
@@ -216,15 +227,43 @@ export default function ReviewPage() {
     }
   };
 
-  const handleDownloadPodcast = () => {
+  const handleDownloadPodcast = async () => {
     if (!podcastUrl || !review) return;
 
-    const link = document.createElement('a');
-    link.href = podcastUrl;
-    link.download = `${review.slug}-podcast.wav`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    try {
+      // Convert WAV to MP3 with album art and metadata
+      const response = await fetch('/api/podcast/convert-to-mp3', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          wavDataUrl: podcastUrl,
+          albumArt: podcastAlbumArt ? {
+            imageData: podcastAlbumArt.split(',')[1], // Remove data URL prefix
+            mimeType: 'image/png',
+          } : undefined,
+          title: `${review.review.title} - ${review.review.artist}`,
+          artist: 'The Smudged Pamphlet',
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to convert podcast to MP3');
+      }
+
+      const { mp3Data, mimeType } = await response.json();
+      const mp3DataUrl = `data:${mimeType};base64,${mp3Data}`;
+
+      // Download the MP3
+      const link = document.createElement('a');
+      link.href = mp3DataUrl;
+      link.download = `${review.slug}-podcast.mp3`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (error) {
+      console.error('Failed to download podcast:', error);
+      alert('Failed to download podcast. Please try again.');
+    }
   };
 
   const handleDeletePodcast = async () => {
@@ -244,6 +283,16 @@ export default function ReviewPage() {
       // Clear state
       setPodcastUrl(undefined);
       setPodcastAlbumArt(undefined);
+
+      // Update localStorage to mark that this review no longer has a podcast
+      const storedReviews = localStorage.getItem('smudged_reviews');
+      if (storedReviews) {
+        const reviews: SavedReview[] = JSON.parse(storedReviews);
+        const updatedReviews = reviews.map(r =>
+          r.id === review.id ? { ...r, hasPodcastInDB: false } : r
+        );
+        localStorage.setItem('smudged_reviews', JSON.stringify(updatedReviews));
+      }
 
       console.log('Podcast deleted successfully');
     } catch (error) {
@@ -292,6 +341,7 @@ export default function ReviewPage() {
         {bannerImage && (
           <div className="mb-8 animate-in fade-in slide-in-from-top-4 duration-700">
             <div className="relative w-full aspect-[16/9] border-4 border-zinc-900 shadow-[8px_8px_0px_0px_rgba(24,24,27,1)] overflow-hidden bg-zinc-900">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={bannerImage}
                 alt={`Banner for ${review.title}`}
@@ -376,6 +426,7 @@ export default function ReviewPage() {
                 return (
                   <>
                     <div className="w-12 h-12 bg-zinc-200 rounded-full overflow-hidden border border-zinc-900">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img src={criticInfo.avatar} alt={criticInfo.name} />
                     </div>
                     <div>
@@ -512,6 +563,7 @@ export default function ReviewPage() {
                 <div key={comment.id} className="group">
                   <div className="flex gap-4">
                     <div className="w-10 h-10 shrink-0 bg-zinc-200 rounded-md overflow-hidden border border-zinc-900">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img src={`https://api.dicebear.com/7.x/identicon/svg?seed=${comment.username}`} alt={comment.username} />
                     </div>
                     <div className="flex-1">
@@ -561,6 +613,7 @@ export default function ReviewPage() {
                               {isCritic && criticInfo ? (
                                 <>
                                   <div className={`w-10 h-10 shrink-0 bg-zinc-900 rounded-full overflow-hidden border-2 ${borderColor} z-10`}>
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
                                     <img src={criticInfo.avatar} alt={criticInfo.name} />
                                   </div>
                                   <div className={`flex-1 bg-zinc-900 text-zinc-100 p-4 rounded-sm shadow-lg relative border-l-4 ${borderColor}`}>
@@ -588,6 +641,7 @@ export default function ReviewPage() {
                               ) : (
                                 <>
                                   <div className="w-10 h-10 shrink-0 bg-zinc-200 rounded-md overflow-hidden border border-zinc-900">
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
                                     <img src={`https://api.dicebear.com/7.x/identicon/svg?seed=${reply.username}`} alt={reply.username} />
                                   </div>
                                   <div className="flex-1 bg-zinc-50 border border-zinc-300 p-4 rounded-sm shadow-sm">

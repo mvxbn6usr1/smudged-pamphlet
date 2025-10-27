@@ -87,6 +87,7 @@ export default function AudioPlayer({ audioUrl, audioFileName, albumArt, wavefor
         {/* Album Art */}
         {albumArt ? (
           <div className="w-32 h-32 shrink-0 bg-zinc-900 rounded-sm overflow-hidden border-2 border-zinc-900 shadow-lg">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={albumArt} alt="Album art" className="w-full h-full object-cover" />
           </div>
         ) : (

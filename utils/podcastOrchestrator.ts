@@ -14,6 +14,11 @@ export interface PodcastGenerationProgress {
   error?: string;
 }
 
+export interface PodcastGenerationResult {
+  audioDataUrl: string;
+  editorialTitle?: string; // Generated title for editorial podcasts
+}
+
 export interface Review {
   id: string;
   title: string;
@@ -32,6 +37,38 @@ export interface Review {
   isYouTube?: boolean;
   documentFileName?: string;
   reviewCritics?: ('music' | 'film' | 'literary' | 'business')[]; // For editorial roundtables
+  // For editorials: information about the original reviews being discussed
+  originalReviews?: Array<{
+    title: string;
+    artist: string;
+    score: number;
+    summary: string;
+    critic?: 'music' | 'film' | 'literary' | 'business';
+    criticName?: string;
+    body: string[];
+    // Media information
+    youtubeUrl?: string;
+    isYouTube?: boolean;
+    audioFileName?: string;
+    hasAudioFile?: boolean;
+    documentFileName?: string;
+    // Actual media content for Gemini
+    mediaContent?: {
+      inlineData?: {
+        data: string;
+        mimeType: string;
+      };
+      fileData?: {
+        fileUri: string;
+        mimeType: string;
+      };
+    };
+  }>;
+  verdicts?: Array<{
+    mediaTitle: string;
+    mediaArtist: string;
+    verdict: 'ROCKS' | 'SUCKS';
+  }>;
 }
 
 /**
@@ -43,7 +80,7 @@ export async function generatePodcast(
   isEditorial: boolean = false,
   onProgress?: (progress: PodcastGenerationProgress) => void,
   quality: 'high' | 'fast' = 'high'
-): Promise<string> {
+): Promise<PodcastGenerationResult> {
   try {
     // Step 1: Check if podcast already exists
     const existingPodcast = await getPodcastAudio(review.id);
@@ -53,7 +90,7 @@ export async function generatePodcast(
         progress: 100,
         message: 'Podcast already exists',
       });
-      return existingPodcast;
+      return { audioDataUrl: existingPodcast };
     }
 
     // Step 2: Generate script
@@ -63,7 +100,7 @@ export async function generatePodcast(
       message: 'Setting up the conversation...',
     });
 
-    const script = await generatePodcastScript({
+    const podcastResult = await generatePodcastScript({
       reviewTitle: review.title,
       artist: review.artist,
       score: review.review.score,
@@ -79,7 +116,12 @@ export async function generatePodcast(
       isYouTube: review.isYouTube,
       documentFileName: review.documentFileName,
       reviewCritics: review.reviewCritics, // Pass participating critics for editorials
+      originalReviews: review.originalReviews, // Pass original reviews for editorials
+      verdicts: review.verdicts, // Pass verdicts for editorials
     });
+
+    const script = podcastResult.script;
+    const editorialTitle = podcastResult.editorialTitle;
 
     onProgress?.({
       status: 'generating_script',
@@ -271,7 +313,10 @@ export async function generatePodcast(
       message: 'Podcast generated successfully!',
     });
 
-    return audioDataUrl;
+    return {
+      audioDataUrl,
+      editorialTitle
+    };
 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Upload, MessageSquare, ThumbsDown, Terminal, ShieldAlert, ChevronDown, Music, Save, Trash2, Archive, X, ExternalLink, FileText, File, Film } from 'lucide-react';
+import { Upload, MessageSquare, ThumbsDown, Terminal, ShieldAlert, ChevronDown, Music, Save, Trash2, Archive, X, FileText, File as FileIcon, Film } from 'lucide-react';
 import clsx from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { useRouter } from 'next/router';
@@ -92,6 +92,7 @@ interface SavedReview {
   isYouTube?: boolean; // Flag to indicate this is a YouTube review
   documentContent?: string; // Extracted text content for documents/PDFs
   documentFileName?: string; // Original document filename
+  hasPodcastInDB?: boolean; // Flag to indicate podcast is in IndexedDB
 }
 
 export default function SmudgedPamphlet() {
@@ -99,6 +100,7 @@ export default function SmudgedPamphlet() {
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [youtubeUrl, setYoutubeUrl] = useState('');
+  const [crustyMode, setCrustyMode] = useState<'normal' | 'extra_crusty' | 'more_yolk' | 'fresh'>('normal');
 
   const [stage, setStage] = useState<string>('idle');
   const [logs, setLogs] = useState<string[]>([]);
@@ -349,22 +351,24 @@ export default function SmudgedPamphlet() {
   const getStaffInfo = getStaffInfoUtil;
   const getCriticInfo = getCriticInfoUtil;
 
-  const getMargotPrompt = (metadata?: MediaMetadata, history?: unknown[], otherCritics?: unknown[]) => {
+  const getMargotPrompt = (metadata?: MediaMetadata, history?: unknown[], otherCritics?: unknown[], crusty?: 'normal' | 'extra_crusty' | 'more_yolk' | 'fresh') => {
     return getCriticPersona('literary', {
       context: 'review',
       metadata,
       history,
-      otherCritics
+      otherCritics,
+      crustyMode: crusty
     });
   };
 
-  const getRexPrompt = (metadata?: MediaMetadata, history?: unknown[], isYouTube?: boolean, otherCritics?: unknown[]) => {
+  const getRexPrompt = (metadata?: MediaMetadata, history?: unknown[], isYouTube?: boolean, otherCritics?: unknown[], crusty?: 'normal' | 'extra_crusty' | 'more_yolk' | 'fresh') => {
     return getCriticPersona('film', {
       context: 'review',
       metadata,
       history,
       otherCritics,
-      isYouTube
+      isYouTube,
+      crustyMode: crusty
     });
   };
 
@@ -404,7 +408,8 @@ export default function SmudgedPamphlet() {
       metadata,
       history: julianHistory,
       otherCritics,
-      isYouTube
+      isYouTube,
+      crustyMode
     });
 
     try {
@@ -481,7 +486,7 @@ export default function SmudgedPamphlet() {
         summary: r.review.summary
       }));
 
-    const systemPrompt = getRexPrompt(metadata, rexHistory, isYouTube, otherCritics);
+    const systemPrompt = getRexPrompt(metadata, rexHistory, isYouTube, otherCritics, crustyMode);
 
     try {
       const result = await model.generateContent({
@@ -693,7 +698,7 @@ Output ONLY valid JSON:
         summary: r.review.summary
       }));
 
-    const systemPrompt = getMargotPrompt(undefined, margotHistory, otherCritics);
+    const systemPrompt = getMargotPrompt(undefined, margotHistory, otherCritics, crustyMode);
 
     try {
       const result = await model.generateContent({
@@ -746,7 +751,8 @@ Output ONLY valid JSON:
     const systemPrompt = getCriticPersona('business', {
       context: 'review',
       isYouTube,
-      metadata
+      metadata,
+      crustyMode
     });
 
     try {
@@ -1158,7 +1164,7 @@ ${JSON.stringify(replyToRespondTo)}
 Respond to this reply, staying in character as ${originalComment.username} (${originalComment.persona_type}).
 Output: {"reply_text":"reply"}`;
 
-      const result = await model.generateContent(prompt);
+      const result = await model.generateContent([prompt, audioPart]);
       const reply = cleanAndParseJSON(result.response.text());
       return {
         type: 'reply',
@@ -1213,7 +1219,7 @@ Write a brief reply from your perspective. You might:
 
 Keep it in character and brief. Output: {"reply_text":"your reply"}`;
 
-        const result = await model.generateContent(prompt);
+        const result = await model.generateContent([prompt, audioPart]);
         const reply = cleanAndParseJSON(result.response.text());
 
         return {
@@ -1253,7 +1259,7 @@ Write a brief comment from your perspective. You might:
 
 Keep it brief and in character. Output: {"text":"your comment"}`;
 
-        const result = await model.generateContent(prompt);
+        const result = await model.generateContent([prompt, audioPart]);
         const comment = cleanAndParseJSON(result.response.text());
 
         return {
@@ -1304,7 +1310,7 @@ Keep it SHORT and ACCESSIBLE. Talk like a regular person.
 
 Output: {"reply_text":"your reply"}`;
 
-        const result = await model.generateContent(prompt);
+        const result = await model.generateContent([prompt, audioPart]);
         const reply = cleanAndParseJSON(result.response.text());
 
         return {
@@ -1348,7 +1354,7 @@ Keep it SHORT. No fancy words. Real talk.
 
 Output: {"text":"your comment"}`;
 
-        const result = await model.generateContent(prompt);
+        const result = await model.generateContent([prompt, audioPart]);
         const comment = cleanAndParseJSON(result.response.text());
 
         return {
@@ -1721,7 +1727,8 @@ Output: {"reply_text":"reply"}`;
       albumArt: albumArtData,
       waveformData,
       youtubeUrl: isYouTube ? youtubeUrl : undefined,
-      isYouTube
+      isYouTube,
+      hasPodcastInDB: false // Podcast not generated yet
     };
 
     const updatedReviews = [newReview, ...savedReviews];
@@ -1808,7 +1815,8 @@ Output: {"reply_text":"reply"}`;
       audioFileName: audioFile.name,
       hasAudioInDB: true, // Audio is in IndexedDB, not localStorage
       albumArt,
-      waveformData
+      waveformData,
+      hasPodcastInDB: false // Podcast not generated yet
     };
 
     const updatedReviews = [newReview, ...savedReviews];
@@ -1933,7 +1941,7 @@ Output: {"reply_text":"reply"}`;
           if (savedReview.review.critic === 'literary' && savedReview.audioFileName) {
             const response = await fetch(audioData);
             const blob = await response.blob();
-            const file = new File([blob], savedReview.audioFileName, { type: blob.type });
+            const file = new File([blob], savedReview.audioFileName, { type: blob.type || 'application/octet-stream' });
             setAudioFile(file);
             setAudioUrl(null);
           } else {
@@ -2315,7 +2323,7 @@ Output: {"reply_text":"reply"}`;
       <main className="max-w-5xl mx-auto px-4 md:px-12 py-8 mt-12">
         {(stage === 'idle' || stage === 'error') && (
         <section className="transition-all">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-stretch">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-stretch">
                 {/* File Upload - Audio, Video, Documents */}
                 <div className="border-4 border-dashed border-zinc-300 hover:border-zinc-900 transition-colors p-8 md:p-12 text-center relative group bg-[#faf9f6] flex flex-col justify-center">
                     <input
@@ -2340,7 +2348,7 @@ Output: {"reply_text":"reply"}`;
                                } else if (fileType.includes('text') || fileType.includes('document')) {
                                  return <FileText className={iconClasses} />;
                                } else {
-                                 return <File className={iconClasses} />;
+                                 return <FileIcon className={iconClasses} />;
                                }
                              })()
                         ) : (
@@ -2377,6 +2385,59 @@ Output: {"reply_text":"reply"}`;
                         className="w-full p-3 border-2 border-zinc-300 focus:border-zinc-900 outline-none font-mono text-sm"
                     />
                     <p className="mt-2 text-xs text-zinc-500">A critic will review the YouTube video content</p>
+                </div>
+
+                {/* Critic Mode Selector */}
+                <div className="border-2 border-zinc-900 bg-white p-6 flex flex-col justify-center">
+                    <label className="block font-black uppercase text-sm mb-3">Critic Mode</label>
+                    <div className="flex flex-col gap-2">
+                        <button
+                            onClick={() => setCrustyMode('fresh')}
+                            className={`py-2 px-3 text-xs font-bold uppercase border-2 transition-colors ${
+                                crustyMode === 'fresh'
+                                    ? 'bg-emerald-600 text-white border-emerald-600'
+                                    : 'bg-white text-emerald-600 border-emerald-300 hover:border-emerald-600'
+                            }`}
+                        >
+                            Fresh
+                        </button>
+                        <button
+                            onClick={() => setCrustyMode('normal')}
+                            className={`py-2 px-3 text-xs font-bold uppercase border-2 transition-colors ${
+                                crustyMode === 'normal'
+                                    ? 'bg-zinc-900 text-white border-zinc-900'
+                                    : 'bg-white text-zinc-900 border-zinc-300 hover:border-zinc-900'
+                            }`}
+                        >
+                            Normal
+                        </button>
+                        <button
+                            onClick={() => setCrustyMode('more_yolk')}
+                            className={`py-2 px-3 text-xs font-bold uppercase border-2 transition-colors ${
+                                crustyMode === 'more_yolk'
+                                    ? 'bg-amber-600 text-white border-amber-600'
+                                    : 'bg-white text-amber-600 border-amber-300 hover:border-amber-600'
+                            }`}
+                        >
+                            More Yolk
+                        </button>
+                        <button
+                            onClick={() => setCrustyMode('extra_crusty')}
+                            className={`py-2 px-3 text-xs font-bold uppercase border-2 transition-colors ${
+                                crustyMode === 'extra_crusty'
+                                    ? 'bg-red-600 text-white border-red-600'
+                                    : 'bg-white text-red-600 border-red-300 hover:border-red-600'
+                            }`}
+                        >
+                            Extra Crusty
+                        </button>
+                    </div>
+                    <p className="mt-3 text-[10px] leading-tight text-zinc-500">
+                        {crustyMode === 'normal' && 'Standard'}
+                        {crustyMode === 'fresh' && 'Charitable & constructive'}
+                        {crustyMode === 'extra_crusty' && 'Unhinged & absurd'}
+                        {crustyMode === 'more_yolk' && 'Grotesquely self-important'}
+                    </p>
                 </div>
             </div>
 
@@ -2443,6 +2504,7 @@ Output: {"reply_text":"reply"}`;
                     {bannerImage && (
                       <div className="my-8 animate-in fade-in slide-in-from-top-4 duration-700">
                         <div className="relative w-full aspect-[16/9] border-4 border-zinc-900 shadow-[8px_8px_0px_0px_rgba(24,24,27,1)] overflow-hidden bg-zinc-900">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img
                             src={bannerImage}
                             alt={`Banner for ${review.title}`}
@@ -2508,6 +2570,7 @@ Output: {"reply_text":"reply"}`;
                           return (
                             <>
                               <div className="w-12 h-12 bg-zinc-200 rounded-full overflow-hidden border border-zinc-900">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
                                 <img src={criticInfo.avatar} alt={criticInfo.name} />
                               </div>
                               <div>
@@ -2568,6 +2631,7 @@ Output: {"reply_text":"reply"}`;
                                         "w-10 h-10 shrink-0 rounded-md overflow-hidden border-2",
                                         (isCriticComment || isEditorComment) ? borderColor : "border-zinc-900 bg-zinc-200"
                                     )}>
+                                         {/* eslint-disable-next-line @next/next/no-img-element */}
                                          <img
                                              src={editorInfo ? editorInfo.avatar : criticInfo ? criticInfo.avatar : `https://api.dicebear.com/7.x/identicon/svg?seed=${comment.username}`}
                                              alt={comment.username}
@@ -2668,6 +2732,7 @@ Output: {"reply_text":"reply"}`;
                                                         {(isCritic || isEditor) ? (
                                                             <>
                                                                 <div className={`w-10 h-10 shrink-0 bg-zinc-900 rounded-full overflow-hidden border-2 ${borderColor} z-10`}>
+                                                                    {/* eslint-disable-next-line @next/next/no-img-element */}
                                                                     <img src={staffInfo.avatar} alt={staffInfo.name} />
                                                                 </div>
                                                                 <div className={`flex-1 bg-zinc-900 text-zinc-100 p-4 rounded-sm shadow-lg relative border-l-4 ${borderColor}`}>
@@ -2712,6 +2777,7 @@ Output: {"reply_text":"reply"}`;
                                                         ) : (
                                                             <>
                                                                 <div className="w-10 h-10 shrink-0 bg-zinc-200 rounded-md overflow-hidden border border-zinc-900">
+                                                                    {/* eslint-disable-next-line @next/next/no-img-element */}
                                                                     <img src={`https://api.dicebear.com/7.x/identicon/svg?seed=${reply.username}`} alt={reply.username} />
                                                                 </div>
                                                                 <div className="flex-1 bg-zinc-50 border border-zinc-300 p-4 rounded-sm shadow-sm">
@@ -2857,9 +2923,12 @@ Output: {"reply_text":"reply"}`;
       </main>
       <footer className="bg-zinc-900 text-zinc-500 py-12 text-center mt-12">
           <p className="font-black uppercase tracking-widest mb-4 text-zinc-300">The Smudged Pamphlet</p>
-          <p className="text-sm max-w-md mx-auto opacity-60">
+          <p className="text-sm max-w-md mx-auto opacity-60 mb-6">
               Est. 2009. Probably. We are better than you, and we know it.
               Powered by autonomous AI agents that hate their jobs.
+          </p>
+          <p className="text-xs max-w-lg mx-auto opacity-40 text-zinc-600">
+              All content is generated by LLMs. Content may be wrong, rude, downright hurtful, or some combination of the three. Use at your own risk.
           </p>
       </footer>
     </div>

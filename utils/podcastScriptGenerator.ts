@@ -26,11 +26,44 @@ interface PodcastGenerationOptions {
   isYouTube?: boolean;
   documentFileName?: string;
   reviewCritics?: ('music' | 'film' | 'literary' | 'business')[]; // For editorial roundtables
+  // For editorials: information about the original reviews being discussed
+  originalReviews?: Array<{
+    title: string;
+    artist: string;
+    score: number;
+    summary: string;
+    critic?: 'music' | 'film' | 'literary' | 'business';
+    criticName?: string;
+    body: string[];
+    // Media information
+    youtubeUrl?: string;
+    isYouTube?: boolean;
+    audioFileName?: string;
+    hasAudioFile?: boolean;
+    documentFileName?: string;
+    // Actual media content for Gemini
+    mediaContent?: {
+      inlineData?: {
+        data: string;
+        mimeType: string;
+      };
+      fileData?: {
+        fileUri: string;
+        mimeType: string;
+      };
+    };
+  }>;
+  verdicts?: Array<{
+    mediaTitle: string;
+    mediaArtist: string;
+    verdict: 'ROCKS' | 'SUCKS';
+  }>;
 }
 
 export interface PodcastGenerationResult {
   script: PodcastScript[] | PodcastSegment[];
   albumArtPrompt: string;
+  editorialTitle?: string; // Generated title for editorial podcasts
 }
 
 /**
@@ -97,7 +130,7 @@ async function generateOneOnOnePodcast(
   body: string[],
   notableLyrics?: string,
   options?: Pick<PodcastGenerationOptions, 'youtubeUrl' | 'audioFileName' | 'isYouTube' | 'documentFileName' | 'criticType' | 'comments'>
-): Promise<PodcastScript[]> {
+): Promise<PodcastGenerationResult> {
   const reviewBodyText = body.join('\n\n');
 
   // Build media context - make it very prominent
@@ -168,15 +201,23 @@ PODCAST GUIDELINES:
 2. Chuck asks the critic to explain their review and score
 3. The conversation should feel natural - include interruptions, agreements, disagreements
 4. Chuck should challenge overly pretentious takes (he's the everyman defender)
-5. The critic should defend their perspective using examples from the review
+5. The critic should defend their perspective using SPECIFIC examples from the content - timestamps, moments, exact quotes
 6. Include 2-3 back-and-forth exchanges that dig deeper into specific points
 7. Reference the reader comments when relevant - "Some readers said..." or "One commenter argued..."
 8. Chuck wraps up with a brief closing statement
 9. Keep the total conversation to 15-25 exchanges (not too long)
 10. Use casual language, contractions, filler words ("you know", "I mean", "like", "uh", "um")
-11. Include short one wordvocalizations and reactions in asterisks: *sighs*, *laughs*, *scoffs*, *groans*, *chuckles*, *pauses*
+11. Include short one word vocalizations (not pauses or ommissions) and reactions in asterisks: *sighs*, *laughs*, *scoffs*, *groans*, *chuckles*,
 12. Use phatic expressions: "Right?", "You see?", "Come on", "Seriously?", "Yeah, yeah", "Hold on", "Wait, wait"
 13. Make it sound like two people actually talking, not reading a script - be messy, overlap, interrupt
+
+CRITICAL - ENGAGE WITH SPECIFICS:
+- When the critic discusses what they liked/disliked, they should reference SPECIFIC moments, sounds, shots, sentences
+- Not "the production was sterile" - instead "that lifeless reverb on the snare at 1:32"
+- Not "the cinematography was bad" - instead "that awkward Dutch angle at 0:47"
+- Not "the writing was pedestrian" - instead quote a specific clunky sentence
+- Chuck should push back with concrete questions: "What exactly bothered you about that part?"
+- The conversation should reveal they ACTUALLY engaged with the content, not just have opinions about it
 
 FORMAT:
 Return ONLY the script in this exact format (no additional commentary):
@@ -223,11 +264,19 @@ DO NOT include stage directions beyond vocalizations. Keep it in "SpeakerName: L
       throw new Error('No script text returned from API');
     }
 
-    return parseScriptToStructured(scriptText);
+    const albumArtPrompt = generateAlbumArtPrompt(reviewTitle, artist, summary);
+    return { script: parseScriptToStructured(scriptText), albumArtPrompt };
   } catch (error) {
     console.error('Error generating podcast script:', error);
     throw error;
   }
+}
+
+/**
+ * Generate a simple album art prompt based on review details
+ */
+function generateAlbumArtPrompt(title: string, artist: string, summary: string): string {
+  return `Create album art for a podcast episode about "${title}" by ${artist}. ${summary}`;
 }
 
 /**
@@ -236,7 +285,7 @@ DO NOT include stage directions beyond vocalizations. Keep it in "SpeakerName: L
 async function generateEditorialRoundtable(
   options: PodcastGenerationOptions,
   comments: any[]
-): Promise<PodcastScript[] | PodcastSegment[]> {
+): Promise<PodcastGenerationResult> {
   const { reviewTitle, artist, score, summary, body } = options;
 
   // Extract unique critics - prioritize reviewCritics if provided
@@ -296,13 +345,25 @@ VOCAL STYLE: Make Chuck sound warm but authoritative as a moderator. He should g
 PANELISTS:
 ${criticDescriptions}
 
-DISCUSSION TOPIC:
-- Work: "${artist}" - "${reviewTitle}"
-- Lead Review Score: ${score}/10
-- Lead Review Summary: "${summary}"
+========== ORIGINAL REVIEWS BEING DISCUSSED ==========
+${options.originalReviews?.map((rev, idx) => {
+  const criticInfo = getCriticInfo(rev.critic || 'music');
+  const mediaType = rev.isYouTube ? 'YouTube video' : rev.hasAudioFile ? 'audio file' : rev.documentFileName ? 'document' : 'media';
+  return `
+━━━ Review #${idx + 1} ━━━
+Work: "${rev.title}" by ${rev.artist}
+Media: [${mediaType}] (actual media file included in this request for your analysis)
+AUTHOR: ${rev.criticName || criticInfo.name} wrote this review
+Score Given: ${rev.score}/10
+Summary: ${rev.summary}
 
-REVIEW CONTENT:
-${reviewBodyText}
+Full Review Body:
+${rev.body.join('\n\n')}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+`;
+}).join('\n') || `- Work: "${artist}" - "${reviewTitle}"\n- Lead Review Score: ${score}/10\n- Lead Review Summary: "${summary}"\n\nREVIEW CONTENT:\n${reviewBodyText}`}
+
+CRITICAL: Each critic knows which review THEY wrote. Defend YOUR review and YOUR score. Critique the OTHER critics' reviews and scores. Do not confuse whose work is whose.
 
 EDITORIAL COMMENTS TO REFERENCE:
 ${comments.slice(0, 10).map(c => {
@@ -326,9 +387,17 @@ ROUNDTABLE GUIDELINES:
 11. Chuck gives a brief closing
 12. Total: 25-40 exchanges for a longer editorial discussion
 13. Use casual language, contractions, filler words ("you know", "I mean", "like", "uh", "um")
-14. Include short one word vocalizations and reactions in asterisks: *sighs*, *laughs*, *scoffs*, *groans*, *chuckles*, *pauses*
+14. Include short one word vocalizations (not pauses or ommissions) and reactions in asterisks: *sighs*, *laughs*, *scoffs*, *groans*, *chuckles*,
 15. Use phatic expressions: "Right?", "You see?", "Come on", "Seriously?", "Yeah, yeah", "Hold on", "Wait, wait"
 16. Sound natural - be messy, overlap, interrupt, talk over each other
+
+CRITICAL - ENGAGE WITH SPECIFICS:
+- Critics defending THEIR reviews should cite SPECIFIC moments from the content they reviewed
+- Critics critiquing OTHERS' reviews should reference specific claims or observations from those reviews
+- Not "I stand by my assessment" - instead "that compression issue at 1:47 was exactly what I meant"
+- Not "I disagree with your score" - instead "you gave it a 6.2 but ignored that awful transition at the bridge"
+- Chuck should push for specifics: "What exactly are you talking about?" "Where in the song?"
+- The conversation should prove everyone actually consumed the media being discussed
 ${participatingCritics.size > 2 ? `
 17. SEGMENT STRUCTURE: Since there are ${participatingCritics.size} panelists, create natural conversation segments where Chuck focuses on ONE critic at a time:
     - Start each segment with Chuck turning to the specific critic: "Let's hear from [Name]..." or "What do you think, [Name]?"
@@ -357,6 +426,19 @@ IMPORTANT: Include one word vocalizations WITHIN the dialogue text, like: "Well 
 DO NOT include stage or music directions beyond vocalizations your script only powers the dialogue itself. Keep it in "SpeakerName: Line" format with vocalizations embedded.`;
 
   try {
+    // Build parts array with prompt text and media files
+    const parts: any[] = [{ text: prompt }];
+
+    // Add media content from original reviews
+    if (options.originalReviews) {
+      options.originalReviews.forEach((rev, idx) => {
+        if (rev.mediaContent) {
+          parts.push(rev.mediaContent);
+          console.log(`Added media for review #${idx + 1}: ${rev.title}`);
+        }
+      });
+    }
+
     const response = await fetch('/api/gemini/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -365,7 +447,7 @@ DO NOT include stage or music directions beyond vocalizations your script only p
         contents: [
           {
             role: 'user',
-            parts: [{ text: prompt }]
+            parts
           }
         ],
         generationConfig: {
@@ -391,6 +473,62 @@ DO NOT include stage or music directions beyond vocalizations your script only p
     console.log('Number of participating critics:', participatingCritics.size);
     console.log('Critics:', Array.from(participatingCritics));
 
+    // Generate album art prompt
+    const albumArtPrompt = generateAlbumArtPrompt(reviewTitle, artist, summary);
+
+    // Generate editorial title directly (not via API call since we're already server-side)
+    let editorialTitle: string | undefined;
+    try {
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (apiKey) {
+        const titlePrompt = `Generate a short, catchy title for this editorial podcast discussion. The title should be 4-6 words that capture the main theme or debate.
+
+Editorial summary: ${summary}
+
+Podcast script excerpt:
+${scriptText.substring(0, 2000)}
+
+Requirements:
+- 4-6 words only
+- Catchy and engaging
+- Reflects the main discussion topic
+- NO quotation marks
+- NO generic phrases like "Editorial Discussion" or "Roundtable"
+- Focus on the actual topic being debated
+
+Return ONLY the title, nothing else.`;
+
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: titlePrompt }] }],
+              generationConfig: {
+                temperature: 0.8,
+                maxOutputTokens: 50,
+              }
+            }),
+          }
+        );
+
+        if (response.ok) {
+          const data = await response.json();
+          const generatedTitle = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+          if (generatedTitle) {
+            editorialTitle = generatedTitle
+              .replace(/^["']|["']$/g, '') // Remove leading/trailing quotes
+              .replace(/\s+/g, ' ') // Normalize whitespace
+              .trim();
+            console.log('Generated editorial title:', editorialTitle);
+          }
+        }
+      }
+    } catch (error) {
+      console.warn('Error generating editorial title:', error);
+    }
+
     // Check if we need to segment (3+ total speakers = 2+ critics + Chuck)
     // TTS API only supports exactly 2 speakers, so we need segments when we have 2+ critics
     if (participatingCritics.size >= 2) {
@@ -399,11 +537,11 @@ DO NOT include stage or music directions beyond vocalizations your script only p
       console.log('Segment break markers found:', (scriptText.match(/---SEGMENT BREAK---|--- SEGMENT BREAK ---|SEGMENT BREAK/gi) || []).length);
       const segments = parseScriptToSegments(scriptText, criticNames);
       console.log('Parsed into', segments.length, 'segments');
-      return segments;
+      return { script: segments, albumArtPrompt, editorialTitle };
     }
 
     console.log('Only 2 total speakers (Chuck + 1 critic), returning flat script');
-    return parseScriptToStructured(scriptText);
+    return { script: parseScriptToStructured(scriptText), albumArtPrompt, editorialTitle };
   } catch (error) {
     console.error('Error generating editorial podcast script:', error);
     throw error;
@@ -462,19 +600,41 @@ function parseScriptToSegments(scriptText: string, criticNames: string[]): Podca
       const chuckName = 'Chuck';
       const critics = uniqueSpeakers.filter(s => s !== chuckName);
 
-      // Create one segment for each critic (Chuck + that critic)
-      for (const critic of critics) {
-        const segmentScript = script.filter(line =>
-          line.speaker === chuckName || line.speaker === critic
-        );
+      // Group consecutive exchanges by critic to avoid duplicates
+      // We'll go through the script linearly and create segments based on speaker transitions
+      let currentCritic: string | null = null;
+      let currentSegmentScript: typeof script = [];
 
-        if (segmentScript.length > 0) {
-          console.log(`Created sub-segment: ${chuckName} + ${critic} (${segmentScript.length} lines)`);
-          segments.push({
-            speakers: [chuckName, critic],
-            script: segmentScript
-          });
+      for (let i = 0; i < script.length; i++) {
+        const line = script[i];
+
+        // If this is a critic line, check if we need to start a new segment
+        if (critics.includes(line.speaker)) {
+          if (currentCritic && currentCritic !== line.speaker) {
+            // Speaker changed - save current segment and start new one
+            if (currentSegmentScript.length > 0) {
+              console.log(`Created sub-segment: ${chuckName} + ${currentCritic} (${currentSegmentScript.length} lines)`);
+              segments.push({
+                speakers: [chuckName, currentCritic],
+                script: currentSegmentScript
+              });
+            }
+            currentSegmentScript = [];
+          }
+          currentCritic = line.speaker;
         }
+
+        // Add line to current segment
+        currentSegmentScript.push(line);
+      }
+
+      // Don't forget the last segment
+      if (currentSegmentScript.length > 0 && currentCritic) {
+        console.log(`Created sub-segment: ${chuckName} + ${currentCritic} (${currentSegmentScript.length} lines)`);
+        segments.push({
+          speakers: [chuckName, currentCritic],
+          script: currentSegmentScript
+        });
       }
     } else {
       // Proper 2-speaker segment

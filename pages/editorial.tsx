@@ -44,6 +44,7 @@ interface SavedReview {
   hasAudioInDB?: boolean;
   youtubeUrl?: string;
   isYouTube?: boolean;
+  hasPodcastInDB?: boolean;
 }
 
 interface Reply {
@@ -89,6 +90,7 @@ interface SavedEditorial {
   timestamp: number;
   reviewIds: string[];
   comments: Comment[];
+  hasPodcastInDB?: boolean;
 }
 
 type StaffType = CriticType | 'editor';
@@ -117,9 +119,10 @@ export default function Editorial() {
   // Podcast state
   const [podcastUrl, setPodcastUrl] = useState<string | undefined>();
   const [podcastAlbumArt, setPodcastAlbumArt] = useState<string | undefined>();
+  const [podcastTitle, setPodcastTitle] = useState<string | undefined>();
   const [isPodcastGenerating, setIsPodcastGenerating] = useState(false);
   const [podcastProgress, setPodcastProgress] = useState<PodcastGenerationProgress | null>(null);
-  const [podcastQuality, setPodcastQuality] = useState<'high' | 'fast'>('high');
+  const [podcastQuality, setPodcastQuality] = useState<'high' | 'fast'>('fast');
 
   // Banner image state
   const [bannerImage, setBannerImage] = useState<string | undefined>();
@@ -211,14 +214,15 @@ export default function Editorial() {
   const handleGenerateEditorialPodcast = async () => {
     if (!editorial || !editorial.id) return;
 
-    // Get the original reviews to extract critic types
+    // Get the original reviews to extract critic types AND full review data
     const storedReviews = localStorage.getItem('smudged_reviews');
     let reviewCritics: ('music' | 'film' | 'literary' | 'business')[] = [];
+    let editorialReviews: SavedReview[] = [];
 
     if (storedReviews && editorial.reviewIds) {
       try {
         const allReviews: SavedReview[] = JSON.parse(storedReviews);
-        const editorialReviews = allReviews.filter(r => editorial.reviewIds.includes(r.id));
+        editorialReviews = allReviews.filter(r => editorial.reviewIds.includes(r.id));
         reviewCritics = editorialReviews
           .map(r => r.review.critic)
           .filter((c): c is 'music' | 'film' | 'literary' | 'business' => !!c);
@@ -229,14 +233,59 @@ export default function Editorial() {
 
     // Enhance comments with critic info from original reviews
     const enhancedComments = comments.map(comment => {
-      // If this comment doesn't have a critic field, try to infer it from the comment metadata
+      // Try to match comment author to original review author
       if (!comment.critic && comment.is_critic) {
-        // Check if the username matches a critic name and assign the type
-        const matchingReview = reviewCritics.length > 0 ? reviewCritics[0] : undefined;
-        return { ...comment, critic: matchingReview };
+        // Find which review this critic wrote based on username/criticName
+        const matchingReview = editorialReviews.find(r =>
+          r.review.criticName === comment.username ||
+          comment.username.includes(r.review.criticName || '')
+        );
+        if (matchingReview?.review.critic) {
+          return { ...comment, critic: matchingReview.review.critic };
+        }
       }
       return comment;
     });
+
+    // Build comprehensive context with ALL reviews being discussed, including media files
+    const reviewsContext = await Promise.all(editorialReviews.map(async (r) => {
+      let mediaContent: any = undefined;
+
+      // Load actual media file if available
+      if (r.hasAudioInDB && r.audioFileName) {
+        try {
+          const audioData = await getAudioData(r.id);
+          if (audioData) {
+            mediaContent = {
+              inlineData: {
+                data: audioData.split(',')[1] || audioData, // Remove data URL prefix if present
+                mimeType: r.audioFileName.endsWith('.mp3') ? 'audio/mpeg' : 'audio/wav'
+              }
+            };
+          }
+        } catch (e) {
+          console.error('Failed to load audio for review', r.id, e);
+        }
+      }
+
+      return {
+        title: r.review.title || r.title,
+        artist: r.review.artist || r.artist,
+        score: r.review.score,
+        summary: r.review.summary,
+        critic: r.review.critic,
+        criticName: r.review.criticName,
+        body: r.review.body,
+        // Include ALL media information
+        youtubeUrl: r.youtubeUrl,
+        isYouTube: r.isYouTube,
+        audioFileName: r.audioFileName,
+        hasAudioFile: r.hasAudioInDB || !!r.audioFileName || !!r.audioDataUrl,
+        documentFileName: (r as any).documentFileName,
+        // Actual media content for Gemini
+        mediaContent
+      };
+    }));
 
     // Create a review-like object for the podcast generator
     const editorialReview = {
@@ -244,15 +293,18 @@ export default function Editorial() {
       title: editorial.title,
       artist: 'Editorial Discussion',
       review: {
-        score: 0, // Not applicable for editorials
+        score: reviewsContext[0]?.score || 0, // Use first review's score as reference
         summary: editorial.summary,
         body: editorial.body,
-        critic: reviewCritics[0] || 'music' as const, // Use first critic as primary
+        critic: reviewCritics[0] || 'music' as const,
         criticName: 'Editorial Team',
       },
       comments: enhancedComments,
       // Pass the list of participating critics
       reviewCritics,
+      // NEW: Pass the actual review data for context
+      originalReviews: reviewsContext,
+      verdicts: editorial.verdicts, // Include editorial verdicts
     };
 
     setIsPodcastGenerating(true);
@@ -263,16 +315,32 @@ export default function Editorial() {
     });
 
     try {
-      const audioDataUrl = await generatePodcast(editorialReview, true, (progress) => {
+      const result = await generatePodcast(editorialReview, true, (progress) => {
         setPodcastProgress(progress);
       }, podcastQuality);
 
-      setPodcastUrl(audioDataUrl);
+      setPodcastUrl(result.audioDataUrl);
+
+      // Set the editorial title if generated
+      if (result.editorialTitle) {
+        setPodcastTitle(result.editorialTitle);
+        console.log('Using generated editorial title:', result.editorialTitle);
+      }
 
       // Load album art from IndexedDB (saved during generation)
       const albumArt = await getPodcastAlbumArt(editorial.id);
       if (albumArt) {
         setPodcastAlbumArt(`data:${albumArt.mimeType};base64,${albumArt.imageData}`);
+      }
+
+      // Update localStorage to mark that this editorial has a podcast
+      const storedEditorials = localStorage.getItem('smudged_editorials');
+      if (storedEditorials) {
+        const editorials: SavedEditorial[] = JSON.parse(storedEditorials);
+        const updatedEditorials = editorials.map(e =>
+          e.id === editorial.id ? { ...e, hasPodcastInDB: true } : e
+        );
+        localStorage.setItem('smudged_editorials', JSON.stringify(updatedEditorials));
       }
 
       setIsPodcastGenerating(false);
@@ -289,15 +357,52 @@ export default function Editorial() {
     }
   };
 
-  const handleDownloadPodcast = () => {
+  const handleDownloadPodcast = async () => {
     if (!podcastUrl || !editorial) return;
 
-    const link = document.createElement('a');
-    link.href = podcastUrl;
-    link.download = `editorial-${editorial.id}-podcast.wav`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    try {
+      // Use the generated editorial title or fall back to a default
+      const title = podcastTitle || editorial.title || 'Editorial Roundtable';
+
+      // Convert WAV to MP3 with album art and metadata
+      const response = await fetch('/api/podcast/convert-to-mp3', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          wavDataUrl: podcastUrl,
+          albumArt: podcastAlbumArt ? {
+            imageData: podcastAlbumArt.split(',')[1], // Remove data URL prefix
+            mimeType: 'image/png',
+          } : undefined,
+          title: title,
+          artist: 'The Smudged Pamphlet',
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to convert podcast to MP3');
+      }
+
+      const { mp3Data, mimeType } = await response.json();
+      const mp3DataUrl = `data:${mimeType};base64,${mp3Data}`;
+
+      // Create a safe filename from the title
+      const safeFilename = title
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '');
+
+      // Download the MP3
+      const link = document.createElement('a');
+      link.href = mp3DataUrl;
+      link.download = `${safeFilename}-podcast.mp3`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (error) {
+      console.error('Failed to download podcast:', error);
+      alert('Failed to download podcast. Please try again.');
+    }
   };
 
   const handleDeletePodcast = async () => {
@@ -317,6 +422,16 @@ export default function Editorial() {
       // Clear state
       setPodcastUrl(undefined);
       setPodcastAlbumArt(undefined);
+
+      // Update localStorage to mark that this editorial no longer has a podcast
+      const storedEditorials = localStorage.getItem('smudged_editorials');
+      if (storedEditorials) {
+        const editorials: SavedEditorial[] = JSON.parse(storedEditorials);
+        const updatedEditorials = editorials.map(e =>
+          e.id === editorial.id ? { ...e, hasPodcastInDB: false } : e
+        );
+        localStorage.setItem('smudged_editorials', JSON.stringify(updatedEditorials));
+      }
 
       console.log('Podcast deleted successfully');
     } catch (error) {
@@ -508,7 +623,8 @@ Output ONLY valid JSON:
     try {
       const editorialToSave: SavedEditorial = {
         ...editorial,
-        comments: comments
+        comments: comments,
+        hasPodcastInDB: false // Podcast not generated yet
       };
 
       console.log('Saving editorial to localStorage...');
@@ -565,6 +681,30 @@ Output ONLY valid JSON:
     const currentComments = commentsRef.current;
 
     try {
+      // Load the reviews that this editorial is about
+      const allReviews: SavedReview[] = JSON.parse(localStorage.getItem('savedReviews') || '[]');
+      const editorialReviews = allReviews.filter(r => editorial.reviewIds?.includes(r.id));
+
+      // Load media content once for all comment types to reuse
+      const mediaParts: any[] = [];
+      for (const review of editorialReviews) {
+        if (review.hasAudioInDB && review.audioFileName) {
+          try {
+            const audioData = await getAudioData(review.id);
+            if (audioData) {
+              mediaParts.push({
+                inlineData: {
+                  data: audioData.split(',')[1] || audioData,
+                  mimeType: review.audioFileName.endsWith('.mp3') ? 'audio/mpeg' : 'audio/wav'
+                }
+              });
+            }
+          } catch (e) {
+            console.error('Failed to load audio for comment generation', review.id);
+          }
+        }
+      }
+
       const interactionType = Math.random();
 
       if (interactionType < 0.4) {
@@ -572,6 +712,11 @@ Output ONLY valid JSON:
         const criticTypes: CriticType[] = ['music', 'film', 'literary', 'business'];
         const criticType = criticTypes[Math.floor(Math.random() * criticTypes.length)];
         const criticInfo = getStaffInfo(criticType);
+
+        // Check which reviews this critic wrote
+        const criticReviews = editorialReviews.filter(r => r.review.critic === criticType);
+        const otherReviews = editorialReviews.filter(r => r.review.critic !== criticType);
+
         const shouldReply = Math.random() < 0.7 && currentComments.length > 0;
 
         if (shouldReply) {
@@ -584,28 +729,36 @@ Output ONLY valid JSON:
             isBoss: true
           });
 
+          const reviewContext = criticReviews.length > 0
+            ? `\n\nYOUR WORK being discussed:\n${criticReviews.map(r => `- "${r.review.title}" by ${r.review.artist} (you gave it ${r.review.score}/10)`).join('\n')}\n\nThe actual media files you reviewed are included in this request.`
+            : `\n\nIMPORTANT: You did NOT write any of the reviews being discussed. The editorial is about these OTHER critics' work:\n${otherReviews.map(r => `- "${r.review.title}" by ${r.review.artist} (${r.review.criticName} gave it ${r.review.score}/10)`).join('\n')}\n\nThe actual media files they reviewed are included in this request. You're commenting as a colleague, not defending your own review.`;
+
           const prompt = `${criticPersona}
 
-You're reading your boss Chuck's editorial about your work and the comments section.
+You're reading your boss Chuck's editorial and the comments section.
 Editorial: ${JSON.stringify(editorial)}
+${reviewContext}
 
 This comment caught your attention:
 ${JSON.stringify(target)}
 
 Write a brief reply from your perspective. You might:
-- Defend your critical approach
+- ${criticReviews.length > 0 ? 'Defend YOUR critical approach and YOUR review' : 'Comment on your colleagues\' work or Chuck\'s take'}
 - Playfully push back against Chuck's populism
 - Show professional tension or reluctant respect
 - Reference your expertise
 
 Keep it in character and brief. Output: {"reply_text":"your reply"}`;
 
+          // Build parts array with prompt and media files
+          const parts: any[] = [{ text: prompt }, ...mediaParts];
+
           const replyResponse = await fetch('/api/gemini/generate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              model: 'gemini-2.0-flash-exp',
-              contents: [{ role: 'user', parts: [{ text: prompt }] }],
+              model: 'gemini-2.5-flash',
+              contents: [{ role: 'user', parts }],
               generationConfig: { responseMimeType: 'application/json' }
             })
           });
@@ -638,25 +791,33 @@ Keep it in character and brief. Output: {"reply_text":"your reply"}`;
             isBoss: true
           });
 
+          const reviewContext = criticReviews.length > 0
+            ? `\n\nYOUR WORK being discussed:\n${criticReviews.map(r => `- "${r.review.title}" by ${r.review.artist} (you gave it ${r.review.score}/10)`).join('\n')}\n\nChuck is critiquing YOUR review. Defend your approach and score. The actual media files you reviewed are included in this request.`
+            : `\n\nIMPORTANT: You did NOT write any of the reviews being discussed. The editorial is about these OTHER critics' work:\n${otherReviews.map(r => `- "${r.review.title}" by ${r.review.artist} (${r.review.criticName} gave it ${r.review.score}/10)`).join('\n')}\n\nThe actual media files they reviewed are included in this request. You're commenting as a colleague observing the discussion, not defending your own review.`;
+
           const prompt = `${criticPersona}
 
-Your boss Chuck Morrison wrote this editorial about your work:
+Your boss Chuck Morrison wrote this editorial:
 ${JSON.stringify(editorial)}
+${reviewContext}
 
 Write a brief comment from your perspective. You might:
-- Defend your critical approach against his populism
+- ${criticReviews.length > 0 ? 'Defend YOUR critical approach and YOUR score against his populism' : 'Weigh in on your colleagues\' work or Chuck\'s analysis'}
 - Acknowledge some of his points reluctantly
 - Show professional tension
 - Reference your expertise and why it matters
 
 Keep it brief and in character. Output: {"text":"your comment"}`;
 
+          // Build parts array with prompt and media files
+          const parts: any[] = [{ text: prompt }, ...mediaParts];
+
           const commentResponse = await fetch('/api/gemini/generate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              model: 'gemini-2.0-flash-exp',
-              contents: [{ role: 'user', parts: [{ text: prompt }] }],
+              model: 'gemini-2.5-flash',
+              contents: [{ role: 'user', parts }],
               generationConfig: { responseMimeType: 'application/json' }
             })
           });
@@ -707,12 +868,14 @@ Keep it SHORT and ACCESSIBLE. Talk like a regular person.
 
 Output: {"reply_text":"your reply"}`;
 
+          const parts: any[] = [{ text: prompt }, ...mediaParts];
+
           const replyResponse = await fetch('/api/gemini/generate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              model: 'gemini-2.0-flash-exp',
-              contents: [{ role: 'user', parts: [{ text: prompt }] }],
+              model: 'gemini-2.5-flash',
+              contents: [{ role: 'user', parts }],
               generationConfig: { responseMimeType: 'application/json' }
             })
           });
@@ -758,12 +921,14 @@ Keep it SHORT and in your everyman voice.
 
 Output: {"text":"your comment"}`;
 
+          const parts: any[] = [{ text: prompt }, ...mediaParts];
+
           const commentResponse = await fetch('/api/gemini/generate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              model: 'gemini-2.0-flash-exp',
-              contents: [{ role: 'user', parts: [{ text: prompt }] }],
+              model: 'gemini-2.5-flash',
+              contents: [{ role: 'user', parts }],
               generationConfig: { responseMimeType: 'application/json' }
             })
           });
@@ -803,12 +968,14 @@ ${JSON.stringify(target)}
 
 Generate a reply from a NEW commenter. Output: {"username":"name","persona_type":"type","reply_text":"reply"}`;
 
+          const parts: any[] = [{ text: prompt }, ...mediaParts];
+
           const replyResponse = await fetch('/api/gemini/generate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              model: 'gemini-2.0-flash-exp',
-              contents: [{ role: 'user', parts: [{ text: prompt }] }],
+              model: 'gemini-2.5-flash',
+              contents: [{ role: 'user', parts }],
               generationConfig: { responseMimeType: 'application/json' }
             })
           });
@@ -838,12 +1005,14 @@ ${JSON.stringify(editorial)}
 
 Generate a new comment. Output: {"username":"name","persona_type":"type","text":"comment"}`;
 
+          const parts: any[] = [{ text: prompt }, ...mediaParts];
+
           const commentResponse = await fetch('/api/gemini/generate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              model: 'gemini-2.0-flash-exp',
-              contents: [{ role: 'user', parts: [{ text: prompt }] }],
+              model: 'gemini-2.5-flash',
+              contents: [{ role: 'user', parts }],
               generationConfig: { responseMimeType: 'application/json' }
             })
           });
@@ -871,7 +1040,7 @@ Generate a new comment. Output: {"username":"name","persona_type":"type","text":
       console.error('Organic comment generation error:', error);
       return null;
     }
-  }, [editorial]);
+  }, [editorial, getStaffInfo]);
 
   // useEffect for organic comment generation
   useEffect(() => {
@@ -904,7 +1073,7 @@ Generate a new comment. Output: {"username":"name","persona_type":"type","text":
 
       // Show typing indicator
       const tempUsername = `User${Math.floor(Math.random() * 1000)}`;
-      let tempCommentId = null;
+      let tempCommentId: string | null = null;
       // Get current comments for reply targeting
       setComments(currentComments => {
         tempCommentId = Math.random() > 0.5 && currentComments.length > 0
@@ -1074,6 +1243,7 @@ Generate a new comment. Output: {"username":"name","persona_type":"type","text":
           </div>
           <div className="flex items-start gap-6">
             <div className="w-20 h-20 bg-zinc-200 rounded-full overflow-hidden border-4 border-red-500">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={editorInfo.avatar} alt={editorInfo.name} />
             </div>
             <div>
@@ -1167,6 +1337,7 @@ Generate a new comment. Output: {"username":"name","persona_type":"type","text":
             {bannerImage && (
               <div className="animate-in fade-in slide-in-from-top-4 duration-700">
                 <div className="relative w-full aspect-[16/9] border-4 border-zinc-900 shadow-[8px_8px_0px_0px_rgba(24,24,27,1)] overflow-hidden bg-zinc-900">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={bannerImage}
                     alt={`Banner for ${editorial.title}`}
@@ -1236,6 +1407,7 @@ Generate a new comment. Output: {"username":"name","persona_type":"type","text":
 
               <div className="mt-8 pt-6 border-t-2 border-zinc-200 flex items-center gap-4">
                 <div className="w-12 h-12 bg-zinc-200 rounded-full overflow-hidden border-2 border-red-500">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={editorInfo.avatar} alt={editorInfo.name} />
                 </div>
                 <div>
@@ -1473,6 +1645,7 @@ Generate a new comment. Output: {"username":"name","persona_type":"type","text":
                         "w-10 h-10 shrink-0 rounded-md overflow-hidden border-2",
                         (isCriticComment || isEditorComment) ? borderColor : "border-zinc-900 bg-zinc-200"
                       )}>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img
                           src={editorInfo ? editorInfo.avatar : criticInfo ? criticInfo.avatar : `https://api.dicebear.com/7.x/identicon/svg?seed=${comment.username}`}
                           alt={comment.username}
@@ -1576,6 +1749,7 @@ Generate a new comment. Output: {"username":"name","persona_type":"type","text":
                                 {(isCritic || isEditor) ? (
                                   <>
                                     <div className={`w-10 h-10 shrink-0 bg-zinc-900 rounded-full overflow-hidden border-2 ${borderColor} z-10`}>
+                                      {/* eslint-disable-next-line @next/next/no-img-element */}
                                       <img src={staffInfo.avatar} alt={staffInfo.name} />
                                     </div>
                                     <div className={`flex-1 bg-zinc-900 text-zinc-100 p-4 rounded-sm shadow-lg relative border-l-4 ${borderColor}`}>
@@ -1604,6 +1778,7 @@ Generate a new comment. Output: {"username":"name","persona_type":"type","text":
                                 ) : (
                                   <>
                                     <div className="w-10 h-10 shrink-0 bg-zinc-200 rounded-md overflow-hidden border-2 border-zinc-900">
+                                      {/* eslint-disable-next-line @next/next/no-img-element */}
                                       <img src={`https://api.dicebear.com/7.x/identicon/svg?seed=${reply.username}`} alt={reply.username} />
                                     </div>
                                     <div className="flex-1 bg-white border-2 border-zinc-300 p-4 rounded-sm shadow-sm">

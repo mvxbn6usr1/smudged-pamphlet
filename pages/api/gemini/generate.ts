@@ -12,7 +12,7 @@ function cleanupExpiredEntries() {
   const now = Date.now();
   let cleanedCount = 0;
 
-  for (const [ip, record] of requestCounts.entries()) {
+  for (const [ip, record] of Array.from(requestCounts.entries())) {
     if (now > record.resetTime) {
       requestCounts.delete(ip);
       cleanedCount++;
