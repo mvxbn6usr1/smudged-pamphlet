@@ -97,6 +97,10 @@ export async function generateContentServerSide(
   const isVercel = typeof window !== 'undefined' &&
     (window.location.hostname.includes('vercel.app') ||
      window.location.hostname.includes('vercel.live'));
+  // Also include smudgedpamphlet.com as "Vercel"-like for asset upload support
+  const isSmudgedPamphlet = typeof window !== 'undefined' &&
+    window.location.hostname.includes('smudgedpamphlet.com');
+  const isVercelOrPamphlet = isVercel || isSmudgedPamphlet;
 
   const isTooLarge = isPayloadTooLarge(request);
 
