@@ -71,40 +71,12 @@ export default async function handler(
     const video = data.items[0];
     const snippet = video.snippet;
 
-    // Determine if it's music content
-    const categoryId = snippet.categoryId;
-    const isMusicCategory = categoryId === '10'; // YouTube Music category ID
-
-    // Check tags and title for music keywords
-    const musicKeywords = [
-      'official video', 'official audio', 'music video', 'official music',
-      'lyrics', 'album', 'single', 'EP', 'soundtrack', 'OST',
-      'remix', 'cover', 'acoustic', 'live performance', 'concert',
-      'ft.', 'feat.', 'prod.', 'official mv'
-    ];
-
-    const title = snippet.title.toLowerCase();
-    const description = snippet.description.toLowerCase();
-    const tags = (snippet.tags || []).map((t: string) => t.toLowerCase());
-
-    const hasMusicKeyword = musicKeywords.some(keyword =>
-      title.includes(keyword) ||
-      description.includes(keyword) ||
-      tags.some((tag: string) => tag.includes(keyword))
-    );
-
-    const channelTitle = snippet.channelTitle.toLowerCase();
-    const musicChannelKeywords = ['vevo', 'records', 'music', 'entertainment', 'official'];
-    const isMusicChannel = musicChannelKeywords.some(keyword => channelTitle.includes(keyword));
-
-    const isMusic = isMusicCategory || hasMusicKeyword || isMusicChannel;
-
+    // Return metadata only - classification happens client-side with full logging
     return res.status(200).json({
       title: snippet.title,
       channelTitle: snippet.channelTitle,
       description: snippet.description,
-      categoryId: categoryId,
-      isMusic: isMusic,
+      categoryId: snippet.categoryId,
       thumbnailUrl: snippet.thumbnails.high?.url || snippet.thumbnails.default?.url,
     });
   } catch (error: any) {

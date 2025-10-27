@@ -12,7 +12,7 @@ function cleanupExpiredEntries() {
   const now = Date.now();
   let cleanedCount = 0;
 
-  for (const [ip, record] of requestCounts.entries()) {
+  for (const [ip, record] of Array.from(requestCounts.entries())) {
     if (now > record.resetTime) {
       requestCounts.delete(ip);
       cleanedCount++;
@@ -54,7 +54,7 @@ function checkRateLimit(ip: string): boolean {
 export const config = {
   api: {
     bodyParser: {
-      sizeLimit: '20mb', // Allow larger payloads for file uploads
+      sizeLimit: '100mb', // Allow larger payloads for editorial generation with multiple media files
     },
   },
 };

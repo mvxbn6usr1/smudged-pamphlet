@@ -1,14 +1,29 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Play, Pause } from 'lucide-react';
+import { Play, Pause, Trash2 } from 'lucide-react';
+
+// Sanitize podcast filename for display
+function sanitizeAudioFileName(filename: string): string {
+  // Remove -podcast.wav suffix
+  filename = filename.replace(/-podcast\.wav$/i, '');
+
+  // Replace hyphens with spaces
+  filename = filename.replace(/-/g, ' ');
+
+  // Capitalize first letter of each word
+  return filename.split(' ').map(word =>
+    word.charAt(0).toUpperCase() + word.slice(1)
+  ).join(' ');
+}
 
 interface AudioPlayerProps {
   audioUrl?: string;
   audioFileName?: string;
   albumArt?: string;
   waveformData?: number[];
+  onDelete?: () => void;
 }
 
-export default function AudioPlayer({ audioUrl, audioFileName, albumArt, waveformData }: AudioPlayerProps) {
+export default function AudioPlayer({ audioUrl, audioFileName, albumArt, waveformData, onDelete }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -54,13 +69,25 @@ export default function AudioPlayer({ audioUrl, audioFileName, albumArt, wavefor
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   return (
-    <div className="bg-zinc-100 border-2 border-zinc-900 p-6 rounded-sm mb-8 shadow-[4px_4px_0px_0px_rgba(24,24,27,1)]">
+    <div className="bg-zinc-100 border-2 border-zinc-900 p-6 rounded-sm mb-8 shadow-[4px_4px_0px_0px_rgba(24,24,27,1)] relative">
       {audioUrl && <audio ref={audioRef} src={audioUrl} />}
+
+      {/* Delete button */}
+      {onDelete && (
+        <button
+          onClick={onDelete}
+          className="absolute top-4 right-4 bg-red-600 text-white p-2 rounded-sm hover:bg-red-700 transition-colors shadow-md"
+          title="Delete podcast"
+        >
+          <Trash2 className="w-4 h-4" />
+        </button>
+      )}
 
       <div className="flex gap-6">
         {/* Album Art */}
         {albumArt ? (
           <div className="w-32 h-32 shrink-0 bg-zinc-900 rounded-sm overflow-hidden border-2 border-zinc-900 shadow-lg">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={albumArt} alt="Album art" className="w-full h-full object-cover" />
           </div>
         ) : (
@@ -72,11 +99,11 @@ export default function AudioPlayer({ audioUrl, audioFileName, albumArt, wavefor
         <div className="flex-1 flex flex-col justify-between">
           {/* Track Info */}
           <div className="font-mono text-sm text-zinc-600 mb-2">
-            {audioFileName ? `[AUDIO: ${audioFileName}]` : '[NO AUDIO AVAILABLE]'}
+            {audioFileName ? `[AUDIO: ${sanitizeAudioFileName(audioFileName)}]` : '[NO AUDIO AVAILABLE]'}
           </div>
 
           {/* Waveform Visualization - Symmetrical */}
-          {waveformData && waveformData.length > 0 && (
+          {waveformData && waveformData.length > 0 ? (
             <div
               className="h-20 flex items-center gap-0.5 cursor-pointer relative overflow-hidden rounded-sm bg-zinc-200/50"
               onClick={handleSeek}
@@ -113,6 +140,27 @@ export default function AudioPlayer({ audioUrl, audioFileName, albumArt, wavefor
                   </div>
                 );
               })}
+            </div>
+          ) : (
+            /* Fallback progress bar for podcasts/audio without waveform */
+            <div
+              className="h-20 cursor-pointer relative overflow-hidden rounded-sm bg-zinc-200/50"
+              onClick={handleSeek}
+            >
+              {/* Progress overlay - same style as waveform */}
+              <div
+                className="absolute inset-0 bg-amber-400/30 pointer-events-none transition-all"
+                style={{ width: `${progress}%` }}
+              />
+              {/* Simple bar indicator */}
+              <div className="h-full flex items-center justify-center">
+                <div className="w-full h-1 bg-zinc-400 relative">
+                  <div
+                    className="absolute inset-0 bg-zinc-900 transition-all"
+                    style={{ width: `${progress}%` }}
+                  />
+                </div>
+              </div>
             </div>
           )}
 

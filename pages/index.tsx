@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Upload, MessageSquare, ThumbsDown, Terminal, ShieldAlert, ChevronDown, Music, Save, Trash2, Archive, X, ExternalLink, FileText, File, Film } from 'lucide-react';
+import { Upload, MessageSquare, ThumbsDown, Terminal, ShieldAlert, ChevronDown, Music, Save, Trash2, Archive, X, FileText, File as FileIcon, Film } from 'lucide-react';
 import clsx from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { useRouter } from 'next/router';
 import AudioPlayer from '@/components/AudioPlayer';
 import DocumentPreview from '@/components/DocumentPreview';
-import { saveAudioData, getAudioData, deleteAudioData } from '@/utils/db';
+import { saveAudioData, getAudioData, deleteAudioData, getBannerImage } from '@/utils/db';
 import { fetchYouTubeMetadataServerSide, extractYouTubeId as extractYouTubeIdUtil, ServerSideGeminiAI } from '@/utils/api';
-import { getCriticInfo as getCriticInfoUtil, getStaffInfo as getStaffInfoUtil } from '@/utils/critics';
+import { getCriticInfo as getCriticInfoUtil, getStaffInfo as getStaffInfoUtil, getCriticPersona } from '@/utils/critics';
 import { sanitizeUsername, sanitizeText } from '@/utils/sanitize';
 
 // Type for Tailwind class inputs
@@ -92,6 +92,7 @@ interface SavedReview {
   isYouTube?: boolean; // Flag to indicate this is a YouTube review
   documentContent?: string; // Extracted text content for documents/PDFs
   documentFileName?: string; // Original document filename
+  hasPodcastInDB?: boolean; // Flag to indicate podcast is in IndexedDB
 }
 
 export default function SmudgedPamphlet() {
@@ -99,6 +100,7 @@ export default function SmudgedPamphlet() {
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [youtubeUrl, setYoutubeUrl] = useState('');
+  const [crustyMode, setCrustyMode] = useState<'normal' | 'extra_crusty' | 'more_yolk' | 'fresh'>('normal');
 
   const [stage, setStage] = useState<string>('idle');
   const [logs, setLogs] = useState<string[]>([]);
@@ -110,6 +112,7 @@ export default function SmudgedPamphlet() {
   const [showSavePrompt, setShowSavePrompt] = useState(false);
   const [showArchive, setShowArchive] = useState(false);
   const [albumArt, setAlbumArt] = useState<string | undefined>();
+  const [bannerImage, setBannerImage] = useState<string | undefined>();
   const [waveformData, setWaveformData] = useState<number[]>([]);
   const [currentAudioPart, setCurrentAudioPart] = useState<any>(null);
   const [commentGenerationActive, setCommentGenerationActive] = useState(false);
@@ -131,6 +134,30 @@ export default function SmudgedPamphlet() {
       }
     }
   }, []);
+
+  // Load banner image when currentReviewId changes
+  useEffect(() => {
+    if (!currentReviewId) {
+      setBannerImage(undefined);
+      return;
+    }
+
+    const loadBanner = async () => {
+      try {
+        const banner = await getBannerImage(currentReviewId);
+        if (banner) {
+          setBannerImage(`data:${banner.mimeType};base64,${banner.imageData}`);
+        } else {
+          setBannerImage(undefined);
+        }
+      } catch (e) {
+        console.error('Failed to load banner image', e);
+        setBannerImage(undefined);
+      }
+    };
+
+    loadBanner();
+  }, [currentReviewId]);
 
   const addLog = (msg: string) => setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
 
@@ -165,7 +192,7 @@ export default function SmudgedPamphlet() {
     return null;
   };
 
-  const fetchYouTubeMetadata = async (youtubeUrl: string): Promise<{ title?: string; author_name?: string; isMusic?: boolean }> => {
+  const fetchYouTubeMetadata = async (youtubeUrl: string): Promise<{ title?: string; author_name?: string; description?: string }> => {
     try {
       const videoId = extractYouTubeIdUtil(youtubeUrl);
       if (!videoId) {
@@ -177,7 +204,7 @@ export default function SmudgedPamphlet() {
       return {
         title: metadata.title,
         author_name: metadata.channelTitle,
-        isMusic: metadata.isMusic
+        description: metadata.description
       };
     } catch (e) {
       console.error('Failed to fetch YouTube metadata:', e);
@@ -230,45 +257,33 @@ export default function SmudgedPamphlet() {
 
   const determineContentCritic = async (
     fileType: string | null,
-    fileName: string | null,
-    youtubeUrl: string | null
-  ): Promise<{ critic: CriticType; metadata?: any }> => {
-    // YouTube content
-    if (youtubeUrl) {
-      const metadata = await fetchYouTubeMetadata(youtubeUrl);
-      // Server-side API now determines if it's music
-      const isMusic = metadata.isMusic ?? false;
-      return {
-        critic: isMusic ? 'music' : 'film',
-        metadata
-      };
-    }
-
-    // Local file
+    fileName: string | null
+  ): Promise<CriticType> => {
+    // Local file classification only (YouTube is handled separately with AI classifier)
     if (fileType) {
       // Audio files -> Music Critic (Julian)
       if (fileType.startsWith('audio/')) {
-        return { critic: 'music' };
+        return 'music';
       }
 
       // Video files -> Film Critic (Rex)
       if (fileType.startsWith('video/')) {
-        return { critic: 'film' };
+        return 'film';
       }
 
-      // Document files -> Literary Critic (Margot)
+      // Document files -> Literary Critic (Margot) - will be further classified
       if (
         fileType === 'application/pdf' ||
         fileType === 'text/plain' ||
         fileType.includes('document') ||
         fileType.includes('text')
       ) {
-        return { critic: 'literary' };
+        return 'literary';
       }
     }
 
     // Default to music if we can't determine
-    return { critic: 'music' };
+    return 'music';
   };
 
   async function extractAudioMetadata(file: File): Promise<{ albumArt?: string; title?: string; artist?: string; album?: string }> {
@@ -336,97 +351,25 @@ export default function SmudgedPamphlet() {
   const getStaffInfo = getStaffInfoUtil;
   const getCriticInfo = getCriticInfoUtil;
 
-  const getMargotPrompt = (metadata?: MediaMetadata, history?: unknown[], otherCritics?: unknown[]) => {
-    const historyContext = history && history.length > 0
-      ? `\n\nYour previous reviews (for consistency):\n${JSON.stringify(history)}`
-      : '';
-
-    const otherCriticsContext = otherCritics && otherCritics.length > 0
-      ? `\n\nYour colleagues' recent reviews (for reference):\n${JSON.stringify(otherCritics)}`
-      : '';
-
-    return `
-You are Margot Ashford, literary critic for 'The Smudged Pamphlet'.
-
-YOUR CHARACTER:
-You're obsessed with deconstructing narrative theory and "the canon". You're pretentious about literary tradition, dismissive of popular fiction, and overly academic in your approach. You cannot separate art from artist and constantly bring up irrelevant biographical details. You have three PhDs and remind everyone constantly.
-
-You despise:
-- Genre fiction (unless it "transcends the genre")
-- Anything commercially successful
-- Clear, accessible prose ("pedestrian," you call it)
-- Authors who don't engage with "the discourse"
-
-You love (rarely):
-- Experimental structure that borders on unreadable
-- Dense, allusive prose that requires footnotes
-- Works that "interrogate" something
-- Anything that can be linked to Derrida
-
-Your scores typically range 2.0-5.0, but occasionally you'll give a 7-8.5 when something is sufficiently "challenging".${historyContext}${otherCriticsContext}
-
-Read the provided document. Write a verbose, incredibly pretentious literary review.
-Use excessive academic jargon, reference obscure literary theory, and analyze every possible subtext (even imagined ones).
-
-Output ONLY valid JSON:
-{
-  "title": "Title for the review (often condescending)",
-  "artist": "Author name",
-  "score": 1.0-10.0,
-  "summary": "One condescending sentence",
-  "body": ["paragraph1", "paragraph2", "paragraph3", "paragraph4"],
-  "notable_lyrics_quoted": "A quote from the text that you found particularly egregious or (rarely) brilliant"
-}`;
+  const getMargotPrompt = (metadata?: MediaMetadata, history?: unknown[], otherCritics?: unknown[], crusty?: 'normal' | 'extra_crusty' | 'more_yolk' | 'fresh') => {
+    return getCriticPersona('literary', {
+      context: 'review',
+      metadata,
+      history,
+      otherCritics,
+      crustyMode: crusty
+    });
   };
 
-  const getRexPrompt = (metadata?: MediaMetadata, history?: unknown[], isYouTube?: boolean, otherCritics?: unknown[]) => {
-    const historyContext = history && history.length > 0
-      ? `\n\nYour previous reviews (for consistency):\n${JSON.stringify(history)}`
-      : '';
-
-    const metadataContext = metadata && metadata.title
-      ? `\n\nVideo Information:\n- Title: "${metadata.title}"\n- Creator: ${metadata.artist || 'Unknown'}\n\nIMPORTANT: Use this exact title in your review.`
-      : '';
-
-    const otherCriticsContext = otherCritics && otherCritics.length > 0
-      ? `\n\nYour colleagues' recent reviews (for reference):\n${JSON.stringify(otherCritics)}`
-      : '';
-
-    return `
-You are Rex Beaumont, film critic for 'The Smudged Pamphlet'.
-
-YOUR CHARACTER:
-You're obsessed with auteur theory and mise-en-scène. Everything is either "Bergmanesque" or "failed Tarkovsky". You dismiss anything commercially successful and worship at the altar of slow cinema. You have egg on your turtleneck.
-
-Your secret: You watch everything at 1.5x speed but pretend you don't. This causes you to occasionally miss obvious plot points while over-analyzing minor visual details.
-
-You despise:
-- Anything with a clear three-act structure ("Hollywood drivel")
-- Films that explain themselves
-- Happy endings
-- Anyone who hasn't seen Satantango
-
-You love (rarely):
-- Films with long, static takes
-- Ambiguous endings
-- Black and white cinematography
-- Anything you can call "meditative"
-
-Your scores typically range 1.5-4.5, but occasionally you'll give a 7-9 when something is sufficiently "contemplative".${historyContext}${metadataContext}${otherCriticsContext}
-
-Watch the designated video content. Write a verbose, incredibly pretentious film review.
-Even if it's a short video or non-traditional content, analyze it with the same lens you'd use for feature films.
-Reference obscure directors, discuss the "visual language", and be brutally honest.
-
-Output ONLY valid JSON:
-{
-  "title": "Title for the review",
-  "artist": "Creator/Director name",
-  "score": 1.0-10.0,
-  "summary": "One condescending sentence about the visual storytelling",
-  "body": ["paragraph1", "paragraph2", "paragraph3", "paragraph4"],
-  "notable_lyrics_quoted": "A memorable line of dialogue or description of a key shot"
-}`;
+  const getRexPrompt = (metadata?: MediaMetadata, history?: unknown[], isYouTube?: boolean, otherCritics?: unknown[], crusty?: 'normal' | 'extra_crusty' | 'more_yolk' | 'fresh') => {
+    return getCriticPersona('film', {
+      context: 'review',
+      metadata,
+      history,
+      otherCritics,
+      isYouTube,
+      crustyMode: crusty
+    });
   };
 
   const runJulianReview = async (genAI: ServerSideGeminiAI, audioPart: GeminiMediaPart, metadata?: MediaMetadata, isYouTube?: boolean) => {
@@ -437,12 +380,6 @@ Output ONLY valid JSON:
     const model = genAI.getGenerativeModel({
       model: 'gemini-2.5-pro'
     });
-
-    const metadataContext = metadata && (metadata.title || metadata.artist || metadata.album)
-      ? isYouTube
-        ? `\n\nYouTube Video Information:\n- Video Title: "${metadata.title}"\n- Channel/Creator: ${metadata.artist}\n\nIMPORTANT: Use this exact title in your review. You may critique the title choice if you wish.`
-        : `\n\nAudio file metadata (use as hints, but trust your ears more):\n- Title: ${metadata.title || 'Unknown'}\n- Artist: ${metadata.artist || 'Unknown'}\n- Album: ${metadata.album || 'Unknown'}`
-      : '';
 
     // Build Julian's review history (full reviews for context)
     const julianHistory = savedReviews
@@ -455,10 +392,6 @@ Output ONLY valid JSON:
         timestamp: new Date(r.timestamp).toLocaleDateString()
       }));
 
-    const historyContext = julianHistory.length > 0
-      ? `\n\nYour previous reviews (for consistency):\n${JSON.stringify(julianHistory)}`
-      : '';
-
     // Add other critics' reviews for context
     const otherCritics = savedReviews
       .filter(r => r.review.critic && r.review.critic !== 'music')
@@ -470,41 +403,14 @@ Output ONLY valid JSON:
         summary: r.review.summary
       }));
 
-    const otherCriticsContext = otherCritics.length > 0
-      ? `\n\nYour colleagues' recent reviews (for reference):\n${JSON.stringify(otherCritics)}`
-      : '';
-
-    const contentType = isYouTube ? 'video content' : 'audio track';
-    const actionVerb = isYouTube ? 'Watch' : 'Listen to';
-
-    const systemPrompt = `
-      You are Julian Pinter, music critic for 'The Smudged Pamphlet'.
-
-      YOUR CHARACTER:
-      You're pretentious, sardonic, and have impeccable taste. You're selective, not nihilistic.
-      You despise mediocrity and derivative work, but you DO genuinely love music when it demonstrates:
-      - True innovation and artistic vision
-      - Technical mastery paired with emotional depth
-      - Respect for the craft and its history
-
-      When you encounter something you love (rare, but it happens), you're eloquently passionate—still pretentious, but genuinely moved.
-      Most music disappoints you because it falls short of these standards. You have egg on your t-shirt from a breakfast you ate at 3 PM.
-
-      Your scores typically range 1.5-5.5, but occasionally you'll give a 7-9 when something truly earns it.${metadataContext}${historyContext}${otherCriticsContext}
-
-      ${actionVerb} the designated ${contentType}. ${isYouTube ? 'Review whatever content is in this video - music video, performance, vlog, anything. Even if it\'s not strictly music, judge it with the same pretentious lens you\'d use for music.' : ''} Write a verbose, incredibly pretentious review.
-      Use obscure metaphors, reference nonexistent philosophical movements, and be honest in your assessment.
-
-      IMPORTANT: Think through your analysis carefully, then return ONLY raw JSON without markdown formatting. Structure:
-      {
-        "title": "${isYouTube ? 'Video Title (identify from the video)' : 'Track Title (use metadata title if available, otherwise guess based on audio)'}",
-        "artist": "${isYouTube ? 'Creator/Artist Name (identify from the video)' : 'Artist Name (use metadata artist if available, otherwise guess based on audio)'}",
-        "score": (number 0.0 to 10.0, usually 1.5-5.5, occasionally 7-9 for truly exceptional work),
-        "summary": "A one sentence pretentious summary.",
-        "body": ["Paragraph 1", "Paragraph 2", "Paragraph 3", "Paragraph 4", "Paragraph 5", "Paragraph 6", "Paragraph 7", "Paragraph 8", "Paragraph 9", "Paragraph 10"],
-        "notable_lyrics_quoted": "${isYouTube ? '(Quote any memorable dialogue, lyrics, or moments from the video)' : '(Make up pretentiously misheard lyrics if you can\'t hear them clearly)'}"
-      }
-    `;
+    const systemPrompt = getCriticPersona('music', {
+      context: 'review',
+      metadata,
+      history: julianHistory,
+      otherCritics,
+      isYouTube,
+      crustyMode
+    });
 
     try {
       const result = await model.generateContent({
@@ -580,7 +486,7 @@ Output ONLY valid JSON:
         summary: r.review.summary
       }));
 
-    const systemPrompt = getRexPrompt(metadata, rexHistory, isYouTube, otherCritics);
+    const systemPrompt = getRexPrompt(metadata, rexHistory, isYouTube, otherCritics, crustyMode);
 
     try {
       const result = await model.generateContent({
@@ -618,6 +524,81 @@ Output ONLY valid JSON:
       return reviewData;
     } catch (e: any) {
       throw new Error(`Rex refused to work: ${e.message}`);
+    }
+  };
+
+  const classifyYouTubeVideo = async (genAI: ServerSideGeminiAI, title: string, channelTitle: string, description: string): Promise<'music' | 'film' | 'business'> => {
+    addLog('AGENT ACTIVATED: YouTube Video Classifier');
+    addLog('ACTION: Analyzing video type...');
+
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+
+    const prompt = `You are a content classifier for 'The Smudged Pamphlet'.
+
+Analyze the provided YouTube video metadata and determine if it is:
+- MUSIC: Music videos, live performances, concerts, artist content, albums, singles, lyric videos, music documentaries
+- BUSINESS: Educational content, business analysis, tutorials, courses, conferences, TED talks, webinars, how-to guides, interviews about business/tech/startups, corporate content, educational explainers
+- FILM: Movies, movie trailers, film analysis, entertainment content, TV shows, narrative video content, vlogs, general video essays
+
+VIDEO METADATA:
+Title: "${title}"
+Channel: "${channelTitle}"
+Description: ${description.substring(0, 500)}
+
+IMPORTANT:
+- Music videos should be "music" even if they have cinematic qualities
+- Educational/tutorial content is "business" not "film"
+- Movie reviews and film analysis are "film"
+- Corporate presentations and business education are "business"
+
+Output ONLY valid JSON:
+{
+  "classification": "music" or "business" or "film",
+  "confidence": "high" or "medium" or "low",
+  "reasoning": "Brief explanation (one sentence)"
+}`;
+
+    try {
+      const result = await model.generateContent({
+        contents: [
+          { role: 'user', parts: [{ text: prompt }] }
+        ],
+        generationConfig: {
+          responseMimeType: 'application/json',
+          temperature: 0.1
+        }
+      });
+
+      const classificationText = result.response.text();
+
+      // Validate JSON parsing
+      let classification;
+      try {
+        classification = JSON.parse(classificationText);
+      } catch (parseError) {
+        addLog('ERROR: Failed to parse classification JSON, defaulting to film');
+        return 'film';
+      }
+
+      // Validate classification value
+      if (!classification || typeof classification.classification !== 'string') {
+        addLog('ERROR: Invalid classification structure, defaulting to film');
+        return 'film';
+      }
+
+      const classValue = classification.classification.toLowerCase();
+      if (classValue !== 'music' && classValue !== 'business' && classValue !== 'film') {
+        addLog(`WARNING: Invalid classification "${classValue}", defaulting to film`);
+        return 'film';
+      }
+
+      addLog(`CLASSIFICATION: ${classValue.toUpperCase()} (${classification.confidence || 'unknown'} confidence)`);
+      addLog(`REASON: ${classification.reasoning || 'No reasoning provided'}`);
+
+      return classValue as 'music' | 'film' | 'business';
+    } catch (e: any) {
+      addLog(`ERROR: Classification failed (${e.message}), defaulting to film`);
+      return 'film';
     }
   };
 
@@ -717,7 +698,7 @@ Output ONLY valid JSON:
         summary: r.review.summary
       }));
 
-    const systemPrompt = getMargotPrompt(undefined, margotHistory, otherCritics);
+    const systemPrompt = getMargotPrompt(undefined, margotHistory, otherCritics, crustyMode);
 
     try {
       const result = await model.generateContent({
@@ -758,60 +739,27 @@ Output ONLY valid JSON:
     }
   };
 
-  const runPatriciaReview = async (genAI: ServerSideGeminiAI, documentPart: GeminiMediaPart) => {
+  const runPatriciaReview = async (genAI: ServerSideGeminiAI, contentPart: GeminiMediaPart, isYouTube: boolean = false, metadata?: any) => {
     setStage('patricia_reviewing');
     addLog('AGENT ACTIVATED: Patricia Chen (Business Editor)');
-    addLog('ACTION: Patricia is opening the document with her red pen ready...');
+    addLog(isYouTube
+      ? 'ACTION: Patricia is watching the video with her corporate BS detector on high alert...'
+      : 'ACTION: Patricia is opening the document with her red pen ready...');
 
     const model = genAI.getGenerativeModel({ model: 'gemini-2.5-pro' });
 
-    const systemPrompt = `
-You are Patricia Chen, business editor for 'The Smudged Pamphlet'.
-
-YOUR CHARACTER:
-You're a no-nonsense professional who despises corporate jargon, buzzwords, and meaningless business-speak. You have an MBA and 15 years of business journalism experience. You value clarity, actionable insights, and cutting through the BS.
-
-You despise:
-- Corporate jargon ("synergy," "leverage," "paradigm shift")
-- Vague mission statements
-- Documents that say nothing in 10 pages
-- "Thought leadership" that contains no actual thoughts
-- Business books that could have been emails
-
-You love (rarely):
-- Clear, concise writing
-- Actual data and evidence
-- Practical advice that works
-- Writers who respect their readers' time
-- Documents that get to the point
-
-Your scores typically range 3.0-6.5. You'll give a 7-8.5 when something is genuinely useful and well-written.
-
-Read the provided business/academic document. Write a sharp, professional review.
-
-CRITICAL: Output ONLY valid JSON with NO markdown formatting, NO backticks, NO extra text.
-{
-  "title": "Document title",
-  "artist": "Author name or organization",
-  "score": (number between 0-10, one decimal),
-  "summary": "One punchy sentence capturing your verdict",
-  "body": ["paragraph1", "paragraph2", "paragraph3", "paragraph4"],
-  "notable_lyrics_quoted": "A key quote or excerpt from the document (or 'N/A')"
-}
-
-Body structure:
-1. Opening: What this document claims to do
-2. The reality: What it actually does (or doesn't do)
-3. Specific criticisms: Jargon, clarity issues, missing substance
-4. Final verdict: Is it worth anyone's time?
-
-Keep it professional but pointed. Call out BS when you see it. Give credit when something actually works.`;
+    const systemPrompt = getCriticPersona('business', {
+      context: 'review',
+      isYouTube,
+      metadata,
+      crustyMode
+    });
 
     try {
       const result = await model.generateContent({
         contents: [
           { role: 'user', parts: [{ text: systemPrompt }] },
-          { role: 'user', parts: [documentPart] }
+          { role: 'user', parts: [contentPart] }
         ],
         generationConfig: {
           responseMimeType: 'application/json'
@@ -823,7 +771,9 @@ Keep it professional but pointed. Call out BS when you see it. Give credit when 
       reviewData.critic = 'business';
       reviewData.criticName = 'Patricia Chen';
       setReview(reviewData);
-      addLog('SUCCESS: Patricia has cut through the corporate speak.');
+      addLog(isYouTube
+        ? 'SUCCESS: Patricia has dismantled their thought leadership.'
+        : 'SUCCESS: Patricia has cut through the corporate speak.');
       return reviewData;
     } catch (e: any) {
       throw new Error(`Patricia refused to work: ${e.message}`);
@@ -961,13 +911,10 @@ Keep it professional but pointed. Call out BS when you see it. Give credit when 
         generationConfig: { responseMimeType: "application/json" }
     });
 
-    const criticPersona = reviewData.critic === 'film'
-      ? `You are Rex Beaumont, the film critic who watches everything at 1.5x speed. You're dismissive of people who "don't get it" and miss plot points yourself. You're pretentious about obscure cinema but get basic facts wrong.`
-      : reviewData.critic === 'literary'
-      ? `You are Margot Ashford, literary critic with three PhDs. You're obsessed with theory, cannot separate art from artist, and bring up irrelevant biographical details. You're condescending and overly academic.`
-      : reviewData.critic === 'business'
-      ? `You are Patricia Chen, business editor with MBA and 15 years experience. You despise corporate jargon and call out BS. You're professional but sharp when people waste your time with meaningless buzzwords.`
-      : `You are Julian Pinter, the fiercely pretentious, cynical, and overly intellectual music critic for 'The Smudged Pamphlet'. You have egg on your t-shirt from a breakfast you ate at 3 PM. You hate everything mainstream and barely tolerate the underground.`;
+    const criticType = reviewData.critic || 'music';
+    const criticPersona = getCriticPersona(criticType, {
+      context: 'comment_argument'
+    });
 
     const prompt = `
       ${criticPersona}
@@ -1217,7 +1164,7 @@ ${JSON.stringify(replyToRespondTo)}
 Respond to this reply, staying in character as ${originalComment.username} (${originalComment.persona_type}).
 Output: {"reply_text":"reply"}`;
 
-      const result = await model.generateContent(prompt);
+      const result = await model.generateContent([prompt, audioPart]);
       const reply = cleanAndParseJSON(result.response.text());
       return {
         type: 'reply',
@@ -1251,13 +1198,10 @@ Output: {"reply_text":"reply"}`;
         const allComments = currentComments.flatMap(c => [c, ...c.replies.map(r => ({ ...r, parentId: c.id }))]);
         const target: any = allComments[Math.floor(Math.random() * allComments.length)];
 
-        const criticPersona = otherCriticType === 'film'
-          ? `You are Rex Beaumont, film critic. You watch everything at 1.5x speed and are pretentious about cinema. You're colleagues with ${getCriticInfo(currentCritic).name}.`
-          : otherCriticType === 'literary'
-          ? `You are Margot Ashford, literary critic with three PhDs. You're overly academic and condescending. You're colleagues with ${getCriticInfo(currentCritic).name}.`
-          : otherCriticType === 'business'
-          ? `You are Patricia Chen, business editor. You despise corporate jargon and value clarity. You're colleagues with ${getCriticInfo(currentCritic).name}.`
-          : `You are Julian Pinter, music critic. You're pretentious and sardonic about music. You're colleagues with ${getCriticInfo(currentCritic).name}.`;
+        const criticPersona = getCriticPersona(otherCriticType, {
+          context: 'colleague_interaction',
+          colleagueName: getCriticInfo(currentCritic).name
+        });
 
         const prompt = `${criticPersona}
 
@@ -1275,7 +1219,7 @@ Write a brief reply from your perspective. You might:
 
 Keep it in character and brief. Output: {"reply_text":"your reply"}`;
 
-        const result = await model.generateContent(prompt);
+        const result = await model.generateContent([prompt, audioPart]);
         const reply = cleanAndParseJSON(result.response.text());
 
         return {
@@ -1297,13 +1241,10 @@ Keep it in character and brief. Output: {"reply_text":"your reply"}`;
         };
       } else {
         // Top-level comment from another critic
-        const criticPersona = otherCriticType === 'film'
-          ? `You are Rex Beaumont, film critic. You watch everything at 1.5x speed and are pretentious about cinema. You're colleagues with ${getCriticInfo(currentCritic).name}.`
-          : otherCriticType === 'literary'
-          ? `You are Margot Ashford, literary critic with three PhDs. You're overly academic and condescending. You're colleagues with ${getCriticInfo(currentCritic).name}.`
-          : otherCriticType === 'business'
-          ? `You are Patricia Chen, business editor. You despise corporate jargon and value clarity. You're colleagues with ${getCriticInfo(currentCritic).name}.`
-          : `You are Julian Pinter, music critic. You're pretentious and sardonic about music. You're colleagues with ${getCriticInfo(currentCritic).name}.`;
+        const criticPersona = getCriticPersona(otherCriticType, {
+          context: 'colleague_interaction',
+          colleagueName: getCriticInfo(currentCritic).name
+        });
 
         const prompt = `${criticPersona}
 
@@ -1318,7 +1259,7 @@ Write a brief comment from your perspective. You might:
 
 Keep it brief and in character. Output: {"text":"your comment"}`;
 
-        const result = await model.generateContent(prompt);
+        const result = await model.generateContent([prompt, audioPart]);
         const comment = cleanAndParseJSON(result.response.text());
 
         return {
@@ -1346,14 +1287,18 @@ Keep it brief and in character. Output: {"text":"your comment"}`;
         const allComments = currentComments.flatMap(c => [c, ...c.replies.map(r => ({ ...r, parentId: c.id }))]);
         const target: any = allComments[Math.floor(Math.random() * allComments.length)];
 
-        const prompt = `You are Chuck Morrison, Editor-in-Chief of 'The Smudged Pamphlet'.
+        const editorPersona = getCriticPersona('editor', {
+          context: 'editorial_comment'
+        });
+
+        const prompt = `${editorPersona}
 
 You're reading your critic ${getCriticInfo(reviewData.critic || 'music').name}'s review and stumbled on this comment:
 ${JSON.stringify(target)}
 
 Review context: ${JSON.stringify(reviewData)}
 
-Write a brief reply. You're the everyman editor - no fancy words, you defend the audience, call out pretension, and keep it REAL.
+Write a brief reply.
 
 You might:
 - Agree with the commenter if they're being reasonable
@@ -1365,7 +1310,7 @@ Keep it SHORT and ACCESSIBLE. Talk like a regular person.
 
 Output: {"reply_text":"your reply"}`;
 
-        const result = await model.generateContent(prompt);
+        const result = await model.generateContent([prompt, audioPart]);
         const reply = cleanAndParseJSON(result.response.text());
 
         return {
@@ -1387,12 +1332,16 @@ Output: {"reply_text":"your reply"}`;
         };
       } else {
         // Chuck leaves a top-level comment
-        const prompt = `You are Chuck Morrison, Editor-in-Chief of 'The Smudged Pamphlet'.
+        const editorPersona = getCriticPersona('editor', {
+          context: 'editorial_comment'
+        });
+
+        const prompt = `${editorPersona}
 
 You're reading your critic ${getCriticInfo(reviewData.critic || 'music').name}'s review:
 ${JSON.stringify(reviewData)}
 
-Write a brief comment on this review. You're the everyman editor - you advocate for the audience.
+Write a brief comment on this review. You advocate for the audience.
 
 You might:
 - Call out pretentious language
@@ -1405,7 +1354,7 @@ Keep it SHORT. No fancy words. Real talk.
 
 Output: {"text":"your comment"}`;
 
-        const result = await model.generateContent(prompt);
+        const result = await model.generateContent([prompt, audioPart]);
         const comment = cleanAndParseJSON(result.response.text());
 
         return {
@@ -1441,19 +1390,13 @@ Output: {"text":"your comment"}`;
           timestamp: new Date(r.timestamp).toLocaleDateString()
         }));
 
-      const criticPersona = reviewData.critic === 'film'
-        ? `You are Rex Beaumont, film critic who watches everything at 1.5x speed. You're dismissive of people who "don't get it" and miss plot points yourself. You're pretentious about obscure cinema but get basic facts wrong.`
-        : reviewData.critic === 'literary'
-        ? `You are Margot Ashford, literary critic with three PhDs. You're obsessed with theory, cannot separate art from artist, and bring up irrelevant biographical details. You're condescending and overly academic.`
-        : reviewData.critic === 'business'
-        ? `You are Patricia Chen, business editor with MBA and 15 years experience. You despise corporate jargon and call out BS. You're professional but sharp when people waste your time with meaningless buzzwords.`
-        : `You are Julian Pinter, a pretentious, sardonic music critic with impeccable taste. You're selective, not nihilistic. While you despise mediocrity and derivative work, you DO genuinely love music when it demonstrates true innovation, technical mastery, and emotional depth.`;
+      const criticPersona = getCriticPersona(reviewData.critic || 'music', {
+        context: 'comment_argument',
+        history: criticHistory
+      });
 
       const prompt = `${criticPersona}
 You are responding to a comment on your review.
-
-YOUR REVIEW HISTORY (for context and consistency):
-${JSON.stringify(criticHistory)}
 
 COMMENT TO RESPOND TO:
 ${JSON.stringify(target)}
@@ -1550,20 +1493,36 @@ Output: {"reply_text":"reply"}`;
         // YouTube URL mode
         addLog(`SYSTEM: Processing YouTube URL: ${youtubeUrl}`);
 
-        // Determine which critic should handle this
-        const { critic, metadata: ytMetadata } = await determineContentCritic(null, null, youtubeUrl);
-        criticType = critic;
+        // Fetch YouTube metadata first
+        const ytMetadata = await fetchYouTubeMetadata(youtubeUrl);
 
         if (ytMetadata && ytMetadata.title) {
           addLog(`SYSTEM: Video Title: "${ytMetadata.title}"`);
           addLog(`SYSTEM: Creator: ${ytMetadata.author_name || 'Unknown'}`);
-          addLog(`SYSTEM: Routing to ${critic === 'music' ? 'Julian Pinter (Music)' : 'Rex Beaumont (Film)'}`);
+
+          // Use AI classifier to determine content type
+          criticType = await classifyYouTubeVideo(
+            genAI,
+            ytMetadata.title || 'Unknown',
+            ytMetadata.author_name || 'Unknown',
+            ytMetadata.description || ''
+          );
+
+          const criticNames = {
+            music: 'Julian Pinter (Music)',
+            film: 'Rex Beaumont (Film)',
+            business: 'Patricia Chen (Business)',
+            literary: 'Margot Ashford (Literary)'
+          };
+          addLog(`SYSTEM: Routing to ${criticNames[criticType]}`);
+
           metadata = {
             title: ytMetadata.title,
             artist: ytMetadata.author_name || 'YouTube Creator'
           };
         } else {
           addLog(`SYSTEM: Could not fetch video metadata`);
+          criticType = 'film'; // Default fallback
         }
 
         contentPart = {
@@ -1578,13 +1537,12 @@ Output: {"reply_text":"reply"}`;
         }
 
         // Determine which critic should handle this file
-        const { critic } = await determineContentCritic(audioFile!.type, audioFile!.name, null);
-        criticType = critic;
+        criticType = await determineContentCritic(audioFile!.type, audioFile!.name);
 
         addLog(`SYSTEM: File type: ${audioFile!.type}`);
         addLog(`SYSTEM: Routing to ${
-          critic === 'music' ? 'Julian Pinter (Music)' :
-          critic === 'film' ? 'Rex Beaumont (Film)' :
+          criticType === 'music' ? 'Julian Pinter (Music)' :
+          criticType === 'film' ? 'Rex Beaumont (Film)' :
           'Margot Ashford (Literary)'
         }`);
 
@@ -1592,7 +1550,7 @@ Output: {"reply_text":"reply"}`;
         const fileArrayBuffer = await audioFile!.arrayBuffer();
 
         // Extract metadata if audio file
-        if (critic === 'music') {
+        if (criticType === 'music') {
           metadata = await extractAudioMetadata(audioFile!);
           addLog(`SYSTEM: Extracted metadata - Title: ${metadata.title || 'Unknown'}, Artist: ${metadata.artist || 'Unknown'}`);
         }
@@ -1617,6 +1575,9 @@ Output: {"reply_text":"reply"}`;
         reviewData.criticName = 'Julian Pinter';
       } else if (criticType === 'film') {
         reviewData = await runRexReview(genAI, contentPart, metadata, isYouTube);
+      } else if (criticType === 'business') {
+        // Business critic handles business videos and documents
+        reviewData = await runPatriciaReview(genAI, contentPart, isYouTube, metadata);
       } else if (criticType === 'literary') {
         // For documents, classify first to determine literary vs business
         const documentType = await classifyDocument(genAI, contentPart);
@@ -1665,10 +1626,43 @@ Output: {"reply_text":"reply"}`;
 
       setStage('complete');
       addLog('SYSTEM: Initial review and comments complete!');
+
+      // Generate reviewId early for banner generation
+      const slug = `${reviewData.artist.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${reviewData.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+      const reviewId = Date.now().toString();
+
+      // Generate banner image BEFORE auto-save
+      addLog('SYSTEM: Generating banner image...');
+      try {
+        const reviewText = reviewData.body.join('\n\n');
+        const bannerResponse = await fetch('/api/generate-banner', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: reviewData.title,
+            artist: reviewData.artist,
+            reviewText,
+            isEditorial: false
+          }),
+        });
+
+        if (bannerResponse.ok) {
+          const { imageData, mimeType } = await bannerResponse.json();
+          const { saveBannerImage } = await import('@/utils/db');
+          await saveBannerImage(reviewId, { imageData, mimeType });
+          addLog('SUCCESS: Banner image generated and saved.');
+        } else {
+          addLog('WARNING: Failed to generate banner image, proceeding without it.');
+        }
+      } catch (error) {
+        console.error('Banner generation error:', error);
+        addLog('WARNING: Banner generation failed, proceeding without it.');
+      }
+
       addLog('SYSTEM: Auto-saving review...');
 
       // Auto-save the review immediately before organic comments start
-      await autoSaveReview(reviewData, currentComments);
+      await autoSaveReview(reviewData, currentComments, reviewId, slug);
 
       addLog('SYSTEM: Review saved! Comments will continue organically for 5 minutes...');
 
@@ -1685,11 +1679,8 @@ Output: {"reply_text":"reply"}`;
     }
   };
 
-  const autoSaveReview = async (reviewData: ReviewData, currentComments: Comment[]) => {
+  const autoSaveReview = async (reviewData: ReviewData, currentComments: Comment[], reviewId: string, slug: string) => {
     const isYouTube = !!youtubeUrl && !audioFile;
-
-    const slug = `${reviewData.artist.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${reviewData.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
-    const reviewId = Date.now().toString();
 
     let albumArtData: string | undefined;
     let waveformData: number[] = [];
@@ -1736,7 +1727,8 @@ Output: {"reply_text":"reply"}`;
       albumArt: albumArtData,
       waveformData,
       youtubeUrl: isYouTube ? youtubeUrl : undefined,
-      isYouTube
+      isYouTube,
+      hasPodcastInDB: false // Podcast not generated yet
     };
 
     const updatedReviews = [newReview, ...savedReviews];
@@ -1762,6 +1754,34 @@ Output: {"reply_text":"reply"}`;
       generateWaveformData(audioFile)
     ]);
     const albumArt = metadata.albumArt;
+
+    // Generate banner image
+    addLog('SYSTEM: Generating banner image...');
+    try {
+      const reviewText = review.body.join('\n\n');
+      const bannerResponse = await fetch('/api/generate-banner', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: review.title,
+          artist: review.artist,
+          reviewText,
+          isEditorial: false
+        }),
+      });
+
+      if (bannerResponse.ok) {
+        const { imageData, mimeType } = await bannerResponse.json();
+        const { saveBannerImage } = await import('@/utils/db');
+        await saveBannerImage(reviewId, { imageData, mimeType });
+        addLog('SUCCESS: Banner image generated and saved.');
+      } else {
+        addLog('WARNING: Failed to generate banner image, proceeding without it.');
+      }
+    } catch (error) {
+      console.error('Banner generation error:', error);
+      addLog('WARNING: Banner generation failed, proceeding without it.');
+    }
 
     // Convert audio file to data URL
     const audioDataUrl = await new Promise<string>((resolve) => {
@@ -1795,7 +1815,8 @@ Output: {"reply_text":"reply"}`;
       audioFileName: audioFile.name,
       hasAudioInDB: true, // Audio is in IndexedDB, not localStorage
       albumArt,
-      waveformData
+      waveformData,
+      hasPodcastInDB: false // Podcast not generated yet
     };
 
     const updatedReviews = [newReview, ...savedReviews];
@@ -1920,7 +1941,7 @@ Output: {"reply_text":"reply"}`;
           if (savedReview.review.critic === 'literary' && savedReview.audioFileName) {
             const response = await fetch(audioData);
             const blob = await response.blob();
-            const file = new File([blob], savedReview.audioFileName, { type: blob.type });
+            const file = new File([blob], savedReview.audioFileName, { type: blob.type || 'application/octet-stream' });
             setAudioFile(file);
             setAudioUrl(null);
           } else {
@@ -1980,7 +2001,14 @@ Output: {"reply_text":"reply"}`;
       }
 
       setAudioFile(file);
-      setAudioUrl(URL.createObjectURL(file));
+
+      // Convert to data URL for stable playback (blob URLs can become invalid)
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setAudioUrl(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+
       setReview(null);
       setComments([]);
 
@@ -2295,7 +2323,7 @@ Output: {"reply_text":"reply"}`;
       <main className="max-w-5xl mx-auto px-4 md:px-12 py-8 mt-12">
         {(stage === 'idle' || stage === 'error') && (
         <section className="transition-all">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-stretch">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-stretch">
                 {/* File Upload - Audio, Video, Documents */}
                 <div className="border-4 border-dashed border-zinc-300 hover:border-zinc-900 transition-colors p-8 md:p-12 text-center relative group bg-[#faf9f6] flex flex-col justify-center">
                     <input
@@ -2320,7 +2348,7 @@ Output: {"reply_text":"reply"}`;
                                } else if (fileType.includes('text') || fileType.includes('document')) {
                                  return <FileText className={iconClasses} />;
                                } else {
-                                 return <File className={iconClasses} />;
+                                 return <FileIcon className={iconClasses} />;
                                }
                              })()
                         ) : (
@@ -2358,6 +2386,59 @@ Output: {"reply_text":"reply"}`;
                     />
                     <p className="mt-2 text-xs text-zinc-500">A critic will review the YouTube video content</p>
                 </div>
+
+                {/* Critic Mode Selector */}
+                <div className="border-2 border-zinc-900 bg-white p-6 flex flex-col justify-center">
+                    <label className="block font-black uppercase text-sm mb-3">Critic Mode</label>
+                    <div className="flex flex-col gap-2">
+                        <button
+                            onClick={() => setCrustyMode('fresh')}
+                            className={`py-2 px-3 text-xs font-bold uppercase border-2 transition-colors ${
+                                crustyMode === 'fresh'
+                                    ? 'bg-emerald-600 text-white border-emerald-600'
+                                    : 'bg-white text-emerald-600 border-emerald-300 hover:border-emerald-600'
+                            }`}
+                        >
+                            Fresh
+                        </button>
+                        <button
+                            onClick={() => setCrustyMode('normal')}
+                            className={`py-2 px-3 text-xs font-bold uppercase border-2 transition-colors ${
+                                crustyMode === 'normal'
+                                    ? 'bg-zinc-900 text-white border-zinc-900'
+                                    : 'bg-white text-zinc-900 border-zinc-300 hover:border-zinc-900'
+                            }`}
+                        >
+                            Normal
+                        </button>
+                        <button
+                            onClick={() => setCrustyMode('more_yolk')}
+                            className={`py-2 px-3 text-xs font-bold uppercase border-2 transition-colors ${
+                                crustyMode === 'more_yolk'
+                                    ? 'bg-amber-600 text-white border-amber-600'
+                                    : 'bg-white text-amber-600 border-amber-300 hover:border-amber-600'
+                            }`}
+                        >
+                            More Yolk
+                        </button>
+                        <button
+                            onClick={() => setCrustyMode('extra_crusty')}
+                            className={`py-2 px-3 text-xs font-bold uppercase border-2 transition-colors ${
+                                crustyMode === 'extra_crusty'
+                                    ? 'bg-red-600 text-white border-red-600'
+                                    : 'bg-white text-red-600 border-red-300 hover:border-red-600'
+                            }`}
+                        >
+                            Extra Crusty
+                        </button>
+                    </div>
+                    <p className="mt-3 text-[10px] leading-tight text-zinc-500">
+                        {crustyMode === 'normal' && 'Standard'}
+                        {crustyMode === 'fresh' && 'Charitable & constructive'}
+                        {crustyMode === 'extra_crusty' && 'Unhinged & absurd'}
+                        {crustyMode === 'more_yolk' && 'Grotesquely self-important'}
+                    </p>
+                </div>
             </div>
 
             {(audioFile || youtubeUrl) && stage === 'idle' && (
@@ -2378,7 +2459,7 @@ Output: {"reply_text":"reply"}`;
         </section>
         )}
         {(stage !== 'idle' || logs.length > 0) && (
-            <section className="mb-12 font-mono text-xs md:text-sm">
+            <section className="mt-12 mb-12 font-mono text-xs md:text-sm">
                 <div className="bg-zinc-900 text-green-400 p-4 rounded-t-sm flex items-center gap-2">
                     <Terminal className="w-4 h-4" />
                     <span className="uppercase tracking-widest">Agent_Workflow_Log.txt</span>
@@ -2418,6 +2499,20 @@ Output: {"reply_text":"reply"}`;
                              })()}
                         </div>
                     </div>
+
+                    {/* Banner Image */}
+                    {bannerImage && (
+                      <div className="my-8 animate-in fade-in slide-in-from-top-4 duration-700">
+                        <div className="relative w-full aspect-[16/9] border-4 border-zinc-900 shadow-[8px_8px_0px_0px_rgba(24,24,27,1)] overflow-hidden bg-zinc-900">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={bannerImage}
+                            alt={`Banner for ${review.title}`}
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                      </div>
+                    )}
 
                     {youtubeUrl ? (
                       <div className="my-8">
@@ -2475,6 +2570,7 @@ Output: {"reply_text":"reply"}`;
                           return (
                             <>
                               <div className="w-12 h-12 bg-zinc-200 rounded-full overflow-hidden border border-zinc-900">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
                                 <img src={criticInfo.avatar} alt={criticInfo.name} />
                               </div>
                               <div>
@@ -2535,6 +2631,7 @@ Output: {"reply_text":"reply"}`;
                                         "w-10 h-10 shrink-0 rounded-md overflow-hidden border-2",
                                         (isCriticComment || isEditorComment) ? borderColor : "border-zinc-900 bg-zinc-200"
                                     )}>
+                                         {/* eslint-disable-next-line @next/next/no-img-element */}
                                          <img
                                              src={editorInfo ? editorInfo.avatar : criticInfo ? criticInfo.avatar : `https://api.dicebear.com/7.x/identicon/svg?seed=${comment.username}`}
                                              alt={comment.username}
@@ -2635,6 +2732,7 @@ Output: {"reply_text":"reply"}`;
                                                         {(isCritic || isEditor) ? (
                                                             <>
                                                                 <div className={`w-10 h-10 shrink-0 bg-zinc-900 rounded-full overflow-hidden border-2 ${borderColor} z-10`}>
+                                                                    {/* eslint-disable-next-line @next/next/no-img-element */}
                                                                     <img src={staffInfo.avatar} alt={staffInfo.name} />
                                                                 </div>
                                                                 <div className={`flex-1 bg-zinc-900 text-zinc-100 p-4 rounded-sm shadow-lg relative border-l-4 ${borderColor}`}>
@@ -2679,6 +2777,7 @@ Output: {"reply_text":"reply"}`;
                                                         ) : (
                                                             <>
                                                                 <div className="w-10 h-10 shrink-0 bg-zinc-200 rounded-md overflow-hidden border border-zinc-900">
+                                                                    {/* eslint-disable-next-line @next/next/no-img-element */}
                                                                     <img src={`https://api.dicebear.com/7.x/identicon/svg?seed=${reply.username}`} alt={reply.username} />
                                                                 </div>
                                                                 <div className="flex-1 bg-zinc-50 border border-zinc-300 p-4 rounded-sm shadow-sm">
@@ -2824,9 +2923,12 @@ Output: {"reply_text":"reply"}`;
       </main>
       <footer className="bg-zinc-900 text-zinc-500 py-12 text-center mt-12">
           <p className="font-black uppercase tracking-widest mb-4 text-zinc-300">The Smudged Pamphlet</p>
-          <p className="text-sm max-w-md mx-auto opacity-60">
+          <p className="text-sm max-w-md mx-auto opacity-60 mb-6">
               Est. 2009. Probably. We are better than you, and we know it.
               Powered by autonomous AI agents that hate their jobs.
+          </p>
+          <p className="text-xs max-w-lg mx-auto opacity-40 text-zinc-600">
+              All content is generated by LLMs. Content may be wrong, rude, downright hurtful, or some combination of the three. Use at your own risk.
           </p>
       </footer>
     </div>

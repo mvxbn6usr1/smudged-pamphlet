@@ -5,7 +5,6 @@ export interface YouTubeMetadata {
   channelTitle: string;
   description: string;
   categoryId: string;
-  isMusic: boolean;
   thumbnailUrl?: string;
 }
 
@@ -41,11 +40,108 @@ export async function fetchYouTubeMetadataServerSide(videoId: string): Promise<Y
 }
 
 /**
+ * Check if payload is too large for standard API route (approaching Vercel 4.5MB limit)
+ */
+function isPayloadTooLarge(request: GeminiGenerateRequest): boolean {
+  const jsonStr = JSON.stringify(request);
+  const sizeBytes = new Blob([jsonStr]).size;
+  const MAX_SAFE_SIZE = 3.5 * 1024 * 1024; // 3.5MB to leave headroom
+  return sizeBytes > MAX_SAFE_SIZE;
+}
+
+/**
+ * Extract media file from request contents
+ */
+function extractMediaFromContents(request: GeminiGenerateRequest): {
+  hasMedia: boolean;
+  mediaData?: string;
+  mimeType?: string;
+  promptText?: string;
+} {
+  const firstContent = request.contents[0];
+  if (!firstContent?.parts) {
+    return { hasMedia: false };
+  }
+
+  let textPart: string | undefined;
+  let mediaPart: any;
+
+  for (const part of firstContent.parts) {
+    if (part.text) {
+      textPart = part.text;
+    } else if (part.inlineData) {
+      mediaPart = part.inlineData;
+    }
+  }
+
+  if (mediaPart) {
+    return {
+      hasMedia: true,
+      mediaData: mediaPart.data,
+      mimeType: mediaPart.mimeType,
+      promptText: textPart,
+    };
+  }
+
+  return { hasMedia: false, promptText: textPart };
+}
+
+/**
  * Generate content using Gemini via server-side API
+ * Automatically uses file upload endpoint for large payloads
  */
 export async function generateContentServerSide(
   request: GeminiGenerateRequest
 ): Promise<GeminiGenerateResponse> {
+  // Check if we're in a browser environment with large payload
+  const isVercel = typeof window !== 'undefined' &&
+    (window.location.hostname.includes('vercel.app') ||
+     window.location.hostname.includes('vercel.live'));
+  // Also include smudgedpamphlet.com as "Vercel"-like for asset upload support
+  const isSmudgedPamphlet = typeof window !== 'undefined' &&
+    window.location.hostname.includes('smudgedpamphlet.com');
+  const isVercelOrPamphlet = isVercel || isSmudgedPamphlet;
+
+  const isTooLarge = isPayloadTooLarge(request);
+
+  // Use file upload endpoint for large payloads in Vercel or smudgedpamphlet.com
+  if (isVercelOrPamphlet && isTooLarge) {
+    const { hasMedia, mediaData, mimeType, promptText } = extractMediaFromContents(request);
+
+    if (hasMedia && mediaData && mimeType && promptText) {
+      // Convert base64 to Blob for file upload
+      const binaryString = atob(mediaData);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      const blob = new Blob([bytes], { type: mimeType });
+
+      // Use FormData for file upload
+      const formData = new FormData();
+      formData.append('model', request.model);
+      formData.append('prompt', promptText);
+      formData.append('media', blob, 'media-file');
+      formData.append('mimeType', mimeType);
+      if (request.generationConfig) {
+        formData.append('generationConfig', JSON.stringify(request.generationConfig));
+      }
+
+      const response = await fetch('/api/review/generate', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to generate content');
+      }
+
+      return response.json();
+    }
+  }
+
+  // Standard JSON API route for smaller payloads or non-Vercel
   const response = await fetch('/api/gemini/generate', {
     method: 'POST',
     headers: {

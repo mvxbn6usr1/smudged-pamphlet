@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
-import { MessageSquare, ThumbsDown, ShieldAlert, ChevronDown, ArrowLeft } from 'lucide-react';
+import { MessageSquare, ThumbsDown, ShieldAlert, ChevronDown, ArrowLeft, Podcast, Download } from 'lucide-react';
 import clsx from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import AudioPlayer from '@/components/AudioPlayer';
 import DocumentPreview from '@/components/DocumentPreview';
-import { getAudioData } from '@/utils/db';
+import { getAudioData, getPodcastAlbumArt, deletePodcastAudio, deletePodcastAlbumArt, getBannerImage } from '@/utils/db';
 import { getCriticInfo as getCriticInfoUtil } from '@/utils/critics';
+import { generatePodcast, getExistingPodcast, type PodcastGenerationProgress } from '@/utils/podcastOrchestrator';
 
 function cn(...inputs: any[]) {
   return twMerge(clsx(inputs));
@@ -79,6 +80,7 @@ interface SavedReview {
   hasAudioInDB?: boolean;
   youtubeUrl?: string;
   isYouTube?: boolean;
+  hasPodcastInDB?: boolean;
 }
 
 export default function ReviewPage() {
@@ -87,6 +89,16 @@ export default function ReviewPage() {
   const [review, setReview] = useState<SavedReview | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | undefined>();
   const [documentFile, setDocumentFile] = useState<File | null>(null);
+
+  // Podcast state
+  const [podcastUrl, setPodcastUrl] = useState<string | undefined>();
+  const [podcastAlbumArt, setPodcastAlbumArt] = useState<string | undefined>();
+  const [isPodcastGenerating, setIsPodcastGenerating] = useState(false);
+  const [podcastProgress, setPodcastProgress] = useState<PodcastGenerationProgress | null>(null);
+  const [podcastQuality, setPodcastQuality] = useState<'high' | 'fast'>('fast');
+
+  // Banner image state
+  const [bannerImage, setBannerImage] = useState<string | undefined>();
 
   useEffect(() => {
     if (!slug) return;
@@ -127,6 +139,32 @@ export default function ReviewPage() {
               setAudioUrl(foundReview.audioDataUrl);
               setDocumentFile(null);
             }
+
+            // Check for existing podcast
+            try {
+              const existingPodcast = await getExistingPodcast(foundReview.id);
+              if (existingPodcast) {
+                setPodcastUrl(existingPodcast);
+
+                // Load album art from IndexedDB
+                const albumArt = await getPodcastAlbumArt(foundReview.id);
+                if (albumArt) {
+                  setPodcastAlbumArt(`data:${albumArt.mimeType};base64,${albumArt.imageData}`);
+                }
+              }
+            } catch (e) {
+              console.error('Failed to check for podcast', e);
+            }
+
+            // Load banner image from IndexedDB
+            try {
+              const banner = await getBannerImage(foundReview.id);
+              if (banner) {
+                setBannerImage(`data:${banner.mimeType};base64,${banner.imageData}`);
+              }
+            } catch (e) {
+              console.error('Failed to load banner image', e);
+            }
           } else {
             router.push('/');
           }
@@ -141,6 +179,127 @@ export default function ReviewPage() {
 
     loadReviewData();
   }, [slug, router]);
+
+  const handleGeneratePodcast = async () => {
+    if (!review) return;
+
+    setIsPodcastGenerating(true);
+    setPodcastProgress({
+      status: 'generating_script',
+      progress: 0,
+      message: 'Starting podcast generation...',
+    });
+
+    try {
+      const result = await generatePodcast(review, false, (progress) => {
+        setPodcastProgress(progress);
+      }, podcastQuality);
+
+      setPodcastUrl(result.audioDataUrl);
+
+      // Load album art from IndexedDB (saved during generation)
+      const albumArt = await getPodcastAlbumArt(review.id);
+      if (albumArt) {
+        setPodcastAlbumArt(`data:${albumArt.mimeType};base64,${albumArt.imageData}`);
+      }
+
+      // Update localStorage to mark that this review has a podcast
+      const storedReviews = localStorage.getItem('smudged_reviews');
+      if (storedReviews) {
+        const reviews: SavedReview[] = JSON.parse(storedReviews);
+        const updatedReviews = reviews.map(r =>
+          r.id === review.id ? { ...r, hasPodcastInDB: true } : r
+        );
+        localStorage.setItem('smudged_reviews', JSON.stringify(updatedReviews));
+      }
+
+      setIsPodcastGenerating(false);
+      setPodcastProgress(null);
+    } catch (error) {
+      console.error('Failed to generate podcast:', error);
+      setIsPodcastGenerating(false);
+      setPodcastProgress({
+        status: 'error',
+        progress: 0,
+        message: 'Failed to generate podcast',
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  };
+
+  const handleDownloadPodcast = async () => {
+    if (!podcastUrl || !review) return;
+
+    try {
+      // Convert WAV to MP3 with album art and metadata
+      const response = await fetch('/api/podcast/convert-to-mp3', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          wavDataUrl: podcastUrl,
+          albumArt: podcastAlbumArt ? {
+            imageData: podcastAlbumArt.split(',')[1], // Remove data URL prefix
+            mimeType: 'image/png',
+          } : undefined,
+          title: `${review.review.title} - ${review.review.artist}`,
+          artist: 'The Smudged Pamphlet',
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to convert podcast to MP3');
+      }
+
+      const { mp3Data, mimeType } = await response.json();
+      const mp3DataUrl = `data:${mimeType};base64,${mp3Data}`;
+
+      // Download the MP3
+      const link = document.createElement('a');
+      link.href = mp3DataUrl;
+      link.download = `${review.slug}-podcast.mp3`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (error) {
+      console.error('Failed to download podcast:', error);
+      alert('Failed to download podcast. Please try again.');
+    }
+  };
+
+  const handleDeletePodcast = async () => {
+    if (!review) return;
+
+    const confirmDelete = window.confirm(
+      'Are you sure you want to delete this podcast? You can regenerate it afterwards.'
+    );
+
+    if (!confirmDelete) return;
+
+    try {
+      // Delete both audio and album art from IndexedDB
+      await deletePodcastAudio(review.id);
+      await deletePodcastAlbumArt(review.id);
+
+      // Clear state
+      setPodcastUrl(undefined);
+      setPodcastAlbumArt(undefined);
+
+      // Update localStorage to mark that this review no longer has a podcast
+      const storedReviews = localStorage.getItem('smudged_reviews');
+      if (storedReviews) {
+        const reviews: SavedReview[] = JSON.parse(storedReviews);
+        const updatedReviews = reviews.map(r =>
+          r.id === review.id ? { ...r, hasPodcastInDB: false } : r
+        );
+        localStorage.setItem('smudged_reviews', JSON.stringify(updatedReviews));
+      }
+
+      console.log('Podcast deleted successfully');
+    } catch (error) {
+      console.error('Failed to delete podcast:', error);
+      alert('Failed to delete podcast. Please try again.');
+    }
+  };
 
   if (!review) {
     return (
@@ -178,6 +337,20 @@ export default function ReviewPage() {
       </header>
 
       <main className="max-w-5xl mx-auto px-4 md:px-12 py-8">
+        {/* Banner Image */}
+        {bannerImage && (
+          <div className="mb-8 animate-in fade-in slide-in-from-top-4 duration-700">
+            <div className="relative w-full aspect-[16/9] border-4 border-zinc-900 shadow-[8px_8px_0px_0px_rgba(24,24,27,1)] overflow-hidden bg-zinc-900">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={bannerImage}
+                alt={`Banner for ${review.title}`}
+                className="w-full h-full object-cover"
+              />
+            </div>
+          </div>
+        )}
+
         <div className="animate-in fade-in slide-in-from-bottom-8 duration-1000">
           <article className="bg-white border-2 border-zinc-900 p-8 md:p-12 shadow-[8px_8px_0px_0px_rgba(24,24,27,1)] mb-16">
             <div className="flex justify-between items-start border-b-2 border-zinc-200 pb-8 mb-8">
@@ -253,6 +426,7 @@ export default function ReviewPage() {
                 return (
                   <>
                     <div className="w-12 h-12 bg-zinc-200 rounded-full overflow-hidden border border-zinc-900">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img src={criticInfo.avatar} alt={criticInfo.name} />
                     </div>
                     <div>
@@ -265,6 +439,120 @@ export default function ReviewPage() {
             </div>
           </article>
 
+          {/* Podcast Section */}
+          <section className="bg-white border-2 border-zinc-900 p-8 shadow-[8px_8px_0px_0px_rgba(24,24,27,1)] mb-12">
+            <div className="flex items-center gap-3 mb-6">
+              <Podcast className="w-6 h-6" />
+              <h3 className="text-2xl font-black uppercase tracking-tight">
+                Podcast Discussion
+              </h3>
+            </div>
+
+            {podcastUrl ? (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-zinc-600 italic">
+                    Listen to Chuck Morrison discuss this review with {review.review.criticName || 'the critic'}.
+                  </p>
+                  <button
+                    onClick={handleDownloadPodcast}
+                    className="flex items-center gap-2 bg-zinc-900 text-white px-4 py-2 font-black uppercase text-xs hover:bg-zinc-800 transition-colors"
+                    title="Download podcast"
+                  >
+                    <Download className="w-4 h-4" />
+                    Download
+                  </button>
+                </div>
+                <AudioPlayer
+                  audioUrl={podcastUrl}
+                  audioFileName={`${review.slug}-podcast.wav`}
+                  albumArt={podcastAlbumArt}
+                  onDelete={handleDeletePodcast}
+                />
+              </div>
+            ) : isPodcastGenerating ? (
+              <div className="space-y-4">
+                <div className="bg-zinc-100 border-2 border-zinc-900 p-6">
+                  <div className="flex items-center gap-4 mb-4">
+                    <div className="animate-spin w-8 h-8 border-4 border-zinc-900 border-t-transparent rounded-full"></div>
+                    <div className="flex-1">
+                      <div className="font-black uppercase text-sm mb-1">
+                        {podcastProgress?.status === 'generating_script' && 'Preparing Discussion'}
+                        {podcastProgress?.status === 'generating_audio' && 'Recording Podcast'}
+                        {podcastProgress?.status === 'complete' && 'Complete'}
+                        {podcastProgress?.status === 'error' && 'Error'}
+                      </div>
+                      <div className="text-sm text-zinc-600">
+                        {podcastProgress?.status === 'generating_script' && 'Setting up the conversation...'}
+                        {podcastProgress?.status === 'generating_audio' && 'This may take a minute...'}
+                        {podcastProgress?.status === 'complete' && 'Ready to play!'}
+                        {podcastProgress?.status === 'error' && (podcastProgress?.error || 'Something went wrong')}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="w-full bg-zinc-300 h-2 border border-zinc-900">
+                    <div
+                      className="bg-zinc-900 h-full transition-all duration-300"
+                      style={{ width: `${podcastProgress?.progress || 0}%` }}
+                    />
+                  </div>
+                  {podcastProgress?.error && (
+                    <div className="mt-4 p-4 bg-red-100 border border-red-600 text-red-800 text-sm">
+                      {podcastProgress.error}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <p className="text-zinc-600">
+                  Want to hear a conversation about this review? Generate a podcast where Chuck Morrison
+                  sits down with {review.review.criticName || 'the critic'} to discuss
+                  &quot;{review.review.title}&quot; by {review.review.artist}.
+                </p>
+
+                {/* Quality Selection */}
+                <div className="space-y-2">
+                  <label className="block text-sm font-bold text-zinc-700 uppercase tracking-wide">
+                    Podcast Quality
+                  </label>
+                  <div className="flex gap-4">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="podcastQuality"
+                        value="high"
+                        checked={podcastQuality === 'high'}
+                        onChange={(e) => setPodcastQuality(e.target.value as 'high' | 'fast')}
+                        className="w-4 h-4 accent-zinc-900"
+                      />
+                      <span className="text-sm font-medium">Higher Quality (slower)</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="podcastQuality"
+                        value="fast"
+                        checked={podcastQuality === 'fast'}
+                        onChange={(e) => setPodcastQuality(e.target.value as 'high' | 'fast')}
+                        className="w-4 h-4 accent-zinc-900"
+                      />
+                      <span className="text-sm font-medium">Faster Generation</span>
+                    </label>
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleGeneratePodcast}
+                  className="flex items-center gap-2 bg-zinc-900 text-white px-6 py-3 font-black uppercase text-sm hover:bg-zinc-800 transition-colors"
+                >
+                  <Podcast className="w-5 h-5" />
+                  Generate Podcast
+                </button>
+              </div>
+            )}
+          </section>
+
           <section id="comments" className="max-w-3xl mx-auto">
             <h3 className="text-2xl font-black uppercase tracking-tight mb-8 flex items-center gap-3">
               <MessageSquare className="w-6 h-6" />
@@ -275,6 +563,7 @@ export default function ReviewPage() {
                 <div key={comment.id} className="group">
                   <div className="flex gap-4">
                     <div className="w-10 h-10 shrink-0 bg-zinc-200 rounded-md overflow-hidden border border-zinc-900">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img src={`https://api.dicebear.com/7.x/identicon/svg?seed=${comment.username}`} alt={comment.username} />
                     </div>
                     <div className="flex-1">
@@ -324,6 +613,7 @@ export default function ReviewPage() {
                               {isCritic && criticInfo ? (
                                 <>
                                   <div className={`w-10 h-10 shrink-0 bg-zinc-900 rounded-full overflow-hidden border-2 ${borderColor} z-10`}>
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
                                     <img src={criticInfo.avatar} alt={criticInfo.name} />
                                   </div>
                                   <div className={`flex-1 bg-zinc-900 text-zinc-100 p-4 rounded-sm shadow-lg relative border-l-4 ${borderColor}`}>
@@ -351,6 +641,7 @@ export default function ReviewPage() {
                               ) : (
                                 <>
                                   <div className="w-10 h-10 shrink-0 bg-zinc-200 rounded-md overflow-hidden border border-zinc-900">
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
                                     <img src={`https://api.dicebear.com/7.x/identicon/svg?seed=${reply.username}`} alt={reply.username} />
                                   </div>
                                   <div className="flex-1 bg-zinc-50 border border-zinc-300 p-4 rounded-sm shadow-sm">
