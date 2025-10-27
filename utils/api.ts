@@ -104,8 +104,8 @@ export async function generateContentServerSide(
 
   const isTooLarge = isPayloadTooLarge(request);
 
-  // Use file upload endpoint for large payloads in Vercel
-  if (isVercel && isTooLarge) {
+  // Use file upload endpoint for large payloads in Vercel or smudgedpamphlet.com
+  if (isVercelOrPamphlet && isTooLarge) {
     const { hasMedia, mediaData, mimeType, promptText } = extractMediaFromContents(request);
 
     if (hasMedia && mediaData && mimeType && promptText) {
