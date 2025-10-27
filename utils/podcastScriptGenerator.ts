@@ -1,4 +1,5 @@
 import { getCriticPersona, getCriticInfo, getStaffInfo, type CriticType } from './critics';
+import { generateContentServerSide } from './api';
 
 interface PodcastScript {
   speaker: string;
@@ -233,30 +234,20 @@ IMPORTANT: Include vocalizations WITHIN the dialogue text, like: "Well *chuckles
 DO NOT include stage directions beyond vocalizations. Keep it in "SpeakerName: Line" format with vocalizations embedded.`;
 
   try {
-    const response = await fetch('/api/gemini/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'gemini-2.5-pro',
-        contents: [
-          {
-            role: 'user',
-            parts: [{ text: prompt }]
-          }
-        ],
-        generationConfig: {
-          temperature: 0.9, // Higher temperature for more creative dialogue
-          maxOutputTokens: 65535,
+    const data = await generateContentServerSide({
+      model: 'gemini-2.5-pro',
+      contents: [
+        {
+          role: 'user',
+          parts: [{ text: prompt }]
         }
-      }),
+      ],
+      generationConfig: {
+        temperature: 0.9, // Higher temperature for more creative dialogue
+        maxOutputTokens: 65535,
+      }
     });
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || 'Failed to generate podcast script');
-    }
-
-    const data = await response.json();
     const scriptText = data.candidates?.[0]?.content?.parts?.[0]?.text ||
                        data.parts?.[0]?.text || '';
 
@@ -439,30 +430,20 @@ DO NOT include stage or music directions beyond vocalizations your script only p
       });
     }
 
-    const response = await fetch('/api/gemini/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'gemini-2.5-pro',
-        contents: [
-          {
-            role: 'user',
-            parts
-          }
-        ],
-        generationConfig: {
-          temperature: 0.9, // Higher temperature for more creative dialogue
-          maxOutputTokens: 65535, // More tokens for longer roundtable discussions
+    const data = await generateContentServerSide({
+      model: 'gemini-2.5-pro',
+      contents: [
+        {
+          role: 'user',
+          parts
         }
-      }),
+      ],
+      generationConfig: {
+        temperature: 0.9, // Higher temperature for more creative dialogue
+        maxOutputTokens: 65535, // More tokens for longer roundtable discussions
+      }
     });
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || 'Failed to generate editorial podcast script');
-    }
-
-    const data = await response.json();
     const scriptText = data.candidates?.[0]?.content?.parts?.[0]?.text ||
                        data.parts?.[0]?.text || '';
 

@@ -7,6 +7,7 @@ import { getAudioData, getPodcastAlbumArt, deletePodcastAudio, deletePodcastAlbu
 import { getStaffInfo as getStaffInfoUtil, getCriticInfo as getCriticInfoUtil, getCriticPersona } from '@/utils/critics';
 import type { CriticType } from '@/utils/critics';
 import { generatePodcast, getExistingPodcast, type PodcastGenerationProgress } from '@/utils/podcastOrchestrator';
+import { generateContentServerSide } from '@/utils/api';
 import AudioPlayer from '@/components/AudioPlayer';
 
 const cn = (...inputs: any[]) => twMerge(clsx(inputs));
@@ -574,21 +575,12 @@ Output ONLY valid JSON:
         ...mediaParts
       ];
 
-      const response = await fetch('/api/gemini/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'gemini-2.5-pro',
-          contents: [{ role: 'user', parts: contentParts }],
-          generationConfig: { responseMimeType: 'application/json' }
-        })
+      const data = await generateContentServerSide({
+        model: 'gemini-2.5-pro',
+        contents: [{ role: 'user', parts: contentParts }],
+        generationConfig: { responseMimeType: 'application/json' }
       });
 
-      if (!response.ok) {
-        throw new Error('Failed to generate editorial');
-      }
-
-      const data = await response.json();
       const editorialText = data.parts[0]?.text || '{}';
       const editorialData = JSON.parse(editorialText);
 
@@ -753,18 +745,12 @@ Keep it in character and brief. Output: {"reply_text":"your reply"}`;
           // Build parts array with prompt and media files
           const parts: any[] = [{ text: prompt }, ...mediaParts];
 
-          const replyResponse = await fetch('/api/gemini/generate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              model: 'gemini-2.5-flash',
-              contents: [{ role: 'user', parts }],
-              generationConfig: { responseMimeType: 'application/json' }
-            })
+          const replyData = await generateContentServerSide({
+            model: 'gemini-2.5-flash',
+            contents: [{ role: 'user', parts }],
+            generationConfig: { responseMimeType: 'application/json' }
           });
 
-          if (!replyResponse.ok) return null;
-          const replyData = await replyResponse.json();
           const replyText = replyData.parts?.[0]?.text || '{}';
           const reply = JSON.parse(replyText);
 
@@ -812,18 +798,12 @@ Keep it brief and in character. Output: {"text":"your comment"}`;
           // Build parts array with prompt and media files
           const parts: any[] = [{ text: prompt }, ...mediaParts];
 
-          const commentResponse = await fetch('/api/gemini/generate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              model: 'gemini-2.5-flash',
-              contents: [{ role: 'user', parts }],
-              generationConfig: { responseMimeType: 'application/json' }
-            })
+          const commentResponseData = await generateContentServerSide({
+            model: 'gemini-2.5-flash',
+            contents: [{ role: 'user', parts }],
+            generationConfig: { responseMimeType: 'application/json' }
           });
 
-          if (!commentResponse.ok) return null;
-          const commentResponseData = await commentResponse.json();
           const commentText = commentResponseData.parts?.[0]?.text || '{}';
           const commentData = JSON.parse(commentText);
 
@@ -870,18 +850,12 @@ Output: {"reply_text":"your reply"}`;
 
           const parts: any[] = [{ text: prompt }, ...mediaParts];
 
-          const replyResponse = await fetch('/api/gemini/generate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              model: 'gemini-2.5-flash',
-              contents: [{ role: 'user', parts }],
-              generationConfig: { responseMimeType: 'application/json' }
-            })
+          const replyData = await generateContentServerSide({
+            model: 'gemini-2.5-flash',
+            contents: [{ role: 'user', parts }],
+            generationConfig: { responseMimeType: 'application/json' }
           });
 
-          if (!replyResponse.ok) return null;
-          const replyData = await replyResponse.json();
           const replyText = replyData.parts?.[0]?.text || '{}';
           const reply = JSON.parse(replyText);
 
@@ -923,18 +897,12 @@ Output: {"text":"your comment"}`;
 
           const parts: any[] = [{ text: prompt }, ...mediaParts];
 
-          const commentResponse = await fetch('/api/gemini/generate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              model: 'gemini-2.5-flash',
-              contents: [{ role: 'user', parts }],
-              generationConfig: { responseMimeType: 'application/json' }
-            })
+          const commentResponseData = await generateContentServerSide({
+            model: 'gemini-2.5-flash',
+            contents: [{ role: 'user', parts }],
+            generationConfig: { responseMimeType: 'application/json' }
           });
 
-          if (!commentResponse.ok) return null;
-          const commentResponseData = await commentResponse.json();
           const commentText = commentResponseData.parts?.[0]?.text || '{}';
           const commentData = JSON.parse(commentText);
 
@@ -970,18 +938,12 @@ Generate a reply from a NEW commenter. Output: {"username":"name","persona_type"
 
           const parts: any[] = [{ text: prompt }, ...mediaParts];
 
-          const replyResponse = await fetch('/api/gemini/generate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              model: 'gemini-2.5-flash',
-              contents: [{ role: 'user', parts }],
-              generationConfig: { responseMimeType: 'application/json' }
-            })
+          const replyData = await generateContentServerSide({
+            model: 'gemini-2.5-flash',
+            contents: [{ role: 'user', parts }],
+            generationConfig: { responseMimeType: 'application/json' }
           });
 
-          if (!replyResponse.ok) return null;
-          const replyData = await replyResponse.json();
           const replyText = replyData.parts?.[0]?.text || '{}';
           const reply = JSON.parse(replyText);
 
@@ -1007,18 +969,12 @@ Generate a new comment. Output: {"username":"name","persona_type":"type","text":
 
           const parts: any[] = [{ text: prompt }, ...mediaParts];
 
-          const commentResponse = await fetch('/api/gemini/generate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              model: 'gemini-2.5-flash',
-              contents: [{ role: 'user', parts }],
-              generationConfig: { responseMimeType: 'application/json' }
-            })
+          const commentResponseData = await generateContentServerSide({
+            model: 'gemini-2.5-flash',
+            contents: [{ role: 'user', parts }],
+            generationConfig: { responseMimeType: 'application/json' }
           });
 
-          if (!commentResponse.ok) return null;
-          const commentResponseData = await commentResponse.json();
           const commentText = commentResponseData.parts?.[0]?.text || '{}';
           const commentData = JSON.parse(commentText);
 
